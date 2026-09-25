@@ -1,10 +1,10 @@
 /* PAF Campo – service worker: app e librerie in cache, tile della mappa in cache mentre le guardi */
-const CACHE = 'paf-campo-v0.3.0';
+const CACHE = 'paf-campo-v0.3.1';
 const TILES = 'paf-tiles';
 const CDN = 'https://cdn.jsdelivr.net/npm/';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './PAF_rilievi.qgz'];
 const LIBS = [CDN + 'sql.js@1.10.3/dist/sql-wasm.js', CDN + 'sql.js@1.10.3/dist/sql-wasm.wasm', CDN + 'leaflet@1.9.4/dist/leaflet.js',
-  CDN + 'leaflet@1.9.4/dist/leaflet.css', CDN + 'docx@8.5.0/build/index.umd.js'];
+  CDN + 'leaflet@1.9.4/dist/leaflet.css', CDN + 'docx@8.5.0/build/index.umd.js', CDN + 'proj4@2.22.0/dist/proj4.js'];
 const TILE_HOSTS = /tile\.openstreetmap\.org|tile\.opentopomap\.org|arcgisonline\.com/;
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE)
