@@ -15,11 +15,11 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -28,12 +28,13 @@ jobs:
           set -e
           mkdir app && cd app
           npm init -y > /dev/null
-          npm i --no-audit --no-fund @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 @capacitor/filesystem@7 @capacitor/share@7 sql.js@1.10.3 leaflet@1.9.4 docx@8.5.0
-          mkdir -p www/lib/sql.js@1.10.3/dist www/lib/leaflet@1.9.4/dist www/lib/docx@8.5.0/build
+          npm i --no-audit --no-fund @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 @capacitor/filesystem@7 @capacitor/share@7 sql.js@1.10.3 leaflet@1.9.4 docx@8.5.0 proj4@2.22.0
+          mkdir -p www/lib/sql.js@1.10.3/dist www/lib/leaflet@1.9.4/dist www/lib/docx@8.5.0/build www/lib/proj4@2.22.0/dist
           cp ../index.html ../manifest.webmanifest ../icon-192.png ../icon-512.png ../PAF_rilievi.qgz www/
           cp node_modules/sql.js/dist/sql-wasm.js node_modules/sql.js/dist/sql-wasm.wasm www/lib/sql.js@1.10.3/dist/
           cp -r node_modules/leaflet/dist/. www/lib/leaflet@1.9.4/dist/
           cp node_modules/docx/build/index.umd.js www/lib/docx@8.5.0/build/
+          cp node_modules/proj4/dist/proj4.js www/lib/proj4@2.22.0/dist/
           echo '{"appId":"it.pafcampo.app","appName":"PAF Campo","webDir":"www","backgroundColor":"#2f6b2a","plugins":{"CapacitorHttp":{"enabled":false}}}' > capacitor.config.json
           npx cap add android
           npx cap sync android
