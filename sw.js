@@ -1,5 +1,5 @@
 /* PAF Campo – service worker: app e librerie in cache, tile della mappa in cache mentre le guardi */
-const CACHE = 'paf-campo-v0.2.0';
+const CACHE = 'paf-campo-v0.3.0';
 const TILES = 'paf-tiles';
 const CDN = 'https://cdn.jsdelivr.net/npm/';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './PAF_rilievi.qgz'];
