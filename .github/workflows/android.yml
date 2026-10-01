@@ -28,13 +28,15 @@ jobs:
           set -e
           mkdir app && cd app
           npm init -y > /dev/null
-          npm i --no-audit --no-fund @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 @capacitor/filesystem@7 @capacitor/share@7 sql.js@1.10.3 leaflet@1.9.4 docx@8.5.0 proj4@2.22.0
-          mkdir -p www/lib/sql.js@1.10.3/dist www/lib/leaflet@1.9.4/dist www/lib/docx@8.5.0/build www/lib/proj4@2.22.0/dist
+          npm i --no-audit --no-fund @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 @capacitor/filesystem@7 @capacitor/share@7 sql.js@1.10.3 leaflet@1.9.4 docx@8.5.0 proj4@2.22.0 jspdf@2.5.1 jspdf-autotable@3.8.2
+          mkdir -p www/lib/sql.js@1.10.3/dist www/lib/leaflet@1.9.4/dist www/lib/docx@8.5.0/build www/lib/proj4@2.22.0/dist www/lib/jspdf@2.5.1/dist www/lib/jspdf-autotable@3.8.2/dist
           cp ../index.html ../manifest.webmanifest ../icon-192.png ../icon-512.png ../PAF_rilievi.qgz www/
           cp node_modules/sql.js/dist/sql-wasm.js node_modules/sql.js/dist/sql-wasm.wasm www/lib/sql.js@1.10.3/dist/
           cp -r node_modules/leaflet/dist/. www/lib/leaflet@1.9.4/dist/
           cp node_modules/docx/build/index.umd.js www/lib/docx@8.5.0/build/
           cp node_modules/proj4/dist/proj4.js www/lib/proj4@2.22.0/dist/
+          cp node_modules/jspdf/dist/jspdf.umd.min.js www/lib/jspdf@2.5.1/dist/
+          cp node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js www/lib/jspdf-autotable@3.8.2/dist/
           echo '{"appId":"it.pafcampo.app","appName":"PAF Campo","webDir":"www","backgroundColor":"#2f6b2a","plugins":{"CapacitorHttp":{"enabled":false}}}' > capacitor.config.json
           npx cap add android
           npx cap sync android
