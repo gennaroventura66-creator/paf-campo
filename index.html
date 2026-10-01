@@ -160,7 +160,7 @@ tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
    PAF Campo — configurazione: specie, schede regionali, norme
    Tutto modificabile: le schede sono dati, non codice.
    ============================================================ */
-const APP_VER = '0.5.0';
+const APP_VER = '0.6.0';
 
 /* Equazioni INFC 2005 (Tabacchi et al., 2011) – coefficienti dal pacchetto R ForIT (CRAN).
    Volume fusto e rami grossi v [dm³] = b1 + b2·d²·h (+ b3·d); fitomassa epigea dw4 [kg] con la stessa forma.
@@ -784,7 +784,9 @@ function schedaView() {
   });
   h += `<details class="sec"><summary>Foto</summary><div class="in">
       <label class="btn sec block" style="margin-bottom:10px">Scatta / aggiungi foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="A.addFoto(this)"></label>
-      <div id="fotos" class="chips"></div></div></details>`;
+      <div id="fotos" class="chips"></div>
+      <p class="muted" style="margin:10px 0 6px">Le foto si sincronizzano con QFieldCloud (1600 px) e compaiono nella scheda stampata, in ordine di data, con la didascalia.</p>
+      <div class="g2"><button class="btn sec" onclick="A.schede('docx',[sel.part])">Scheda completa (Word)</button><button class="btn sec" onclick="A.schede('pdf',[sel.part])">Scheda completa (PDF)</button></div></div></details>`;
   if (pa.geom) h += `<div class="card"><b>Confine cartografico</b>: ${fmt(GEO.areaHa(pa.geom), 4)} ha <button class="btn sm sec" onclick="go('mappa')">Mappa</button></div>`;
   else h += `<div class="card muted">Nessun confine: disegnalo o traccialo col GPS dalla scheda Mappa, oppure importalo da QGIS. <button class="btn sm sec" onclick="go('mappa')">Mappa</button></div>`;
   const st = partStats(pa);
@@ -806,9 +808,7 @@ function renderField(o, f, store = 'particelle') {
 }
 async function loadFoto() {
   const pa = part(); const box = $('#fotos'); if (!box || !pa) return;
-  const ids = pa.foto || []; let h = '';
-  for (const id of ids) { const f = await DB.get('foto', id); if (f) h += `<div style="position:relative"><img src="${f.data}" style="width:96px;height:96px;object-fit:cover;border-radius:8px"><button class="chip" style="position:absolute;top:2px;right:2px;min-height:28px;padding:2px 8px" onclick="A.delFoto('${id}')">✕</button></div>`; }
-  box.innerHTML = h || '<span class="muted">Nessuna foto</span>';
+  box.innerHTML = await fotoGallery(pa);
 }
 
 /* ---------- RILIEVO ---------- */
@@ -1021,7 +1021,11 @@ VIEWS.altro = () => {
   if (p) h += `<div class="card"><h2>Esporta – ${esc(p.nome || 'piano')}</h2><p class="muted">CSV con separatore “;” e virgola decimale, pronti per Excel/LibreOffice.</p>
     <div class="g2"><button class="btn sec" onclick="A.csv('piedilista')">Piedilista</button><button class="btn sec" onclick="A.csv('altezze')">Altezze</button>
     <button class="btn sec" onclick="A.csv('particelle')">Schede particellari</button><button class="btn sec" onclick="A.csv('risultati')">Risultati</button></div>
-    <button class="btn block" style="margin-top:8px" onclick="A.printReg()">Stampa ${esc(TX('reg').replace(/ \(.*\)/, '').toLowerCase())} / PDF</button></div>`;
+    <button class="btn block" style="margin-top:8px" onclick="A.printReg()">Stampa ${esc(TX('reg').replace(/ \(.*\)/, '').toLowerCase())} / PDF</button>
+    <h3>Report con tabelle e grafici</h3>
+    <p class="muted">Aree di saggio: quadro generale, confronto fra ${esc(TX('uns'))}, distribuzioni diametriche, composizione, errore di stima e piedilista. Schede: descrizione per sezioni, risultati dendrometrici e foto impaginate con didascalie.</p>
+    <div class="g2"><button class="btn" onclick="A.adsReport('docx')">Aree di saggio (Word)</button><button class="btn" onclick="A.adsReport('pdf')">Aree di saggio (PDF)</button>
+    <button class="btn" onclick="A.schede('docx')">Schede ${esc(TX('us').toLowerCase())} (Word)</button><button class="btn" onclick="A.schede('pdf')">Schede ${esc(TX('us').toLowerCase())} (PDF)</button></div></div>`;
   if (p) {
     h += `<div class="card"><h2>QGIS · QField · QFieldCloud</h2>
       <p class="muted">Il piano viene scambiato come GeoPackage <b>${GPKG_FILE}</b> (WGS84 / UTM 33N, EPSG:32633) con il progetto QGIS <b>PAF_rilievi.qgz</b>: particelle con scheda completa, aree di saggio, piedilista, altezze.</p>
@@ -1140,12 +1144,26 @@ const A = {
       const m = 1600; const k = Math.min(1, m / Math.max(img.width, img.height));
       const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
-      const f = {id: uid(), partId: pa.id, progId: pa.progId, data: cv.toDataURL('image/jpeg', 0.8), t: Date.now()};
+      const t = Date.now();
+      const f = {id: uid(), partId: pa.id, progId: pa.progId, data: cv.toDataURL('image/jpeg', 0.8), t, mod: t, cap: '', op: typeof opName === 'function' ? opName() : '', lat: pa.lat || '', lon: pa.lon || ''};
       await DB.put('foto', f); pa.foto = (pa.foto || []).concat(f.id); await save('particelle', pa); loadFoto(); toast('Foto salvata');
+      navigator.geolocation && navigator.geolocation.getCurrentPosition(c => { f.lat = c.coords.latitude.toFixed(6); f.lon = c.coords.longitude.toFixed(6); DB.put('foto', f); }, () => {}, {maximumAge: 60000, timeout: 8000});
     };
     img.src = url;
   },
-  async delFoto(id) { const pa = part(); if (!confirm('Eliminare la foto?')) return; await DB.del('foto', id); pa.foto = (pa.foto || []).filter(x => x !== id); await save('particelle', pa); loadFoto(); },
+  async delFoto(id) {
+    const pa = part(); if (!confirm('Eliminare la foto?')) return;
+    const f = await DB.get('foto', id);
+    if (f && pa.progId && prog() && prog().qfc_pid) { f.del = true; f.data = ''; await DB.put('foto', f); } else await DB.del('foto', id);
+    pa.foto = (pa.foto || []).filter(x => x !== id); await save('particelle', pa); loadFoto();
+  },
+  async fotoCap(id, v) { const f = await DB.get('foto', id); if (!f) return; f.cap = v.trim(); f.mod = Date.now(); await DB.put('foto', f); LS.set('paf-lastmod', Date.now()); if (typeof autoMark === 'function') autoMark(); },
+  async fotoBig(id) {
+    const f = await DB.get('foto', id); if (!f || !f.data) return;
+    const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;background:#000d;z-index:999;display:flex;align-items:center;justify-content:center'; d.onclick = () => d.remove();
+    d.innerHTML = `<img src="${f.data}" style="max-width:96vw;max-height:92vh;object-fit:contain"><div style="position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#fff;font-size:13px">${esc(fotoDate(f))}${f.cap ? ' – ' + esc(f.cap) : ''}</div>`;
+    document.body.appendChild(d);
+  },
   genDescr() {
     const pa = part(); if (pa.descr && !confirm('Sostituire la descrizione esistente?')) return;
     pa.descr = narrativa(pa); save('particelle', pa); schedaView(); toast('Descrizione generata: rivedila');
@@ -1271,6 +1289,8 @@ const A = {
     out(`${(p.nome || 'piano').replace(/[^\w]+/g, '_')}_${kind}.csv`, txt, 'text/csv', false);
   },
   relF(el) { const p = prog(); p.rel = p.rel || {}; p.rel[el.dataset.rk] = el.value; saveLater('progetti', p); },
+  adsReport(kind, ids) { return adsReport(kind, ids); },
+  schede(kind, ids) { return schedeDoc(kind, ids); },
   async relazione() {
     const p = prog(); toast('Preparo la relazione…', 2500);
     try { const blob = await relazioneDocx(p.id); await out(`Relazione_${(p.nome || 'PAF').replace(/[^\w]+/g, '_')}.docx`, blob, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', false); }
@@ -1848,7 +1868,8 @@ function gpkgSchema(sch) {
     osservazioni: {geom: null, cols: [['uuid', 'TEXT'], ['mod_ts', 'INTEGER'], ['part_uuid', 'TEXT'], ['ads_uuid', 'TEXT'], ['operatore', 'TEXT'], ['dispositivo', 'TEXT'], ['data', 'TEXT'], ['dati', 'TEXT']]},
     specie: {geom: null, cols: [['codice', 'TEXT'], ['nome', 'TEXT'], ['tipo', 'TEXT']]},
     opzioni: {geom: null, cols: [['campo', 'TEXT'], ['valore', 'TEXT'], ['ordine', 'INTEGER']]},
-    incarichi: {geom: null, cols: INC_COLS}
+    incarichi: {geom: null, cols: INC_COLS},
+    foto: {geom: null, cols: FOTO_COLS}
   };
 }
 
@@ -1940,6 +1961,7 @@ async function exportGpkg(progId) {
   const os = S.osservazioni.filter(o => o.progId === progId && Object.keys(ossData(o)).length);
   os.forEach((o, i) => insertRow(db, 'osservazioni', schema.osservazioni, {fid: i + 1, uuid: o.id, mod_ts: o.mod || o.t, part_uuid: o.partId, ads_uuid: o.rilId || null, operatore: o.op || null, dispositivo: o.dev || null, data: new Date(o.t || o.mod).toISOString(), dati: JSON.stringify(ossData(o))}));
   incRows(progId).forEach(r => insertRow(db, 'incarichi', schema.incarichi, r));
+  (await fotoRows(progId)).forEach(r => insertRow(db, 'foto', schema.foto, r));
   S.specie.forEach((s, i) => insertRow(db, 'specie', schema.specie, {fid: i + 1, codice: s.id, nome: s.nome, tipo: s.tipo}));
   let of = 0; sch.forEach(s => s.f.forEach(([k, , t, opts]) => { if (opts) opts.forEach((v, i) => insertRow(db, 'opzioni', schema.opzioni, {fid: ++of, campo: k, valore: v, ordine: i + 1})); }));
   insertRow(db, 'opzioni', schema.opzioni, {fid: ++of, campo: 'tipo_ads', valore: 'ads', ordine: 1});
@@ -2156,6 +2178,8 @@ async function importGpkg_(u8, intoProgId, opt = {}) {
 
   // divisione del lavoro
   if (tableCols(db, 'incarichi').length) { const ir = await incMerge(rows(db, 'incarichi'), p.id); rep.inc = ir.chg; rep.chg += ir.chg; }
+  // foto: tabella e file nel progetto cloud
+  if (tableCols(db, 'foto').length) { const fr = await fotoMerge(rows(db, 'foto'), bdb && tableCols(bdb, 'foto').length ? rows(bdb, 'foto') : null, p.id); rep.foto = fr.nuove; rep.chg += fr.chg; }
   // sintesi delle descrizioni ricalcolata
   for (const pa of S.particelle.filter(x => x.progId === p.id && (touched.has(x.id) || ossOf(x.id).length || (x.synk || []).length))) if (await ossApply(pa)) rep.synth++;
   try { rep.layers = await readRifLayers(db, p); } catch (e) { console.warn('layer extra', e); rep.layers = 0; }
@@ -2941,7 +2965,8 @@ const QFC = {
   create: (name, owner) => QFC.req('POST', 'projects/', {name, owner, description: 'Piano di assestamento forestale – PAF Campo', is_public: false}),
   files: pid => QFC.req('GET', `files/${pid}/`),
   download: (pid, name) => QFC.req('GET', `files/${pid}/${String(name).split('/').map(encodeURIComponent).join('/')}/`, null, true),
-  upload: (pid, name, data, mime = 'application/octet-stream') => QFC.req('POST', `files/${pid}/${encodeURIComponent(name)}/`, {file: data instanceof Uint8Array ? data : new Uint8Array(data), name, mime}),
+  upload: (pid, name, data, mime = 'application/octet-stream') => QFC.req('POST', `files/${pid}/${String(name).split('/').map(encodeURIComponent).join('/')}/`, {file: data instanceof Uint8Array ? data : new Uint8Array(data), name, mime}),
+  remove: (pid, name) => QFC.req('DELETE', `files/${pid}/${String(name).split('/').map(encodeURIComponent).join('/')}/`),
   package: pid => QFC.req('POST', 'jobs/', {project_id: pid, type: 'package'})
 };
 const fileSig = (files, n) => { const f = files.find(x => x.name === n); return f ? (f.md5sum || f.sha256 || '') + '|' + (f.last_modified || f.size || '') : ''; };
@@ -2977,9 +3002,11 @@ async function qfcSync(prog, log = () => {}, force = true) {
         const q = await (await fetch('./PAF_rilievi.qgz')).arrayBuffer();
         await QFC.upload(pid, 'PAF_rilievi.qgz', q, 'application/zip');
       }
-      try { await QFC.package(pid); } catch (e) {}
       files = await QFC.files(pid);
-    } else log('Nessuna modifica locale da inviare.');
+      if (await fotoPush(prog, files, log)) files = await QFC.files(pid);
+      try { await QFC.package(pid); } catch (e) {}
+    } else { log('Nessuna modifica locale da inviare.'); if (await fotoPush(prog, files, log)) files = await QFC.files(pid); }
+    await fotoPull(prog, files, log);
     prog.qfc_sig = fileSig(files, GPKG_FILE); prog.qfc_last = t0; prog.qfc_err = ''; await DB.put('progetti', prog);
     log('Sincronizzazione completata. In QField premi "Sincronizza" per ricevere i dati.');
     return chg;
@@ -3272,6 +3299,515 @@ async function incMerge(rs, pid) {
   }
   if (lost.length) setTimeout(() => toast(`Attenzione: ${lost.map(x => x.nome).join(', ')} ${lost.length > 1 ? 'erano già state prese' : 'era già stata presa'} da ${[...new Set(lost.map(x => x.op))].join(', ')}`, 6000), 300);
   return {chg, lost};
+}
+
+/* ============================================================
+   Foto delle particelle: archivio locale (store "foto"), tabella "foto" nel GeoPackage
+   e file foto/<id>.jpg nel progetto QFieldCloud, così le foto arrivano a tutti gli operatori
+   e al sito web. Le immagini sono ridotte a 1600 px (circa 300 KB).
+   Record: {id, partId, progId, data (dataURL), t, cap (didascalia), op, lat, lon, mod, del}
+   ============================================================ */
+const FOTO_COLS = [['uuid', 'TEXT'], ['mod_ts', 'INTEGER'], ['part_uuid', 'TEXT'], ['file', 'TEXT'], ['didascalia', 'TEXT'], ['operatore', 'TEXT'], ['data', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL']];
+const fotoFile = f => 'foto/' + f.id + '.jpg';
+const fotoDate = f => f.t ? new Date(f.t).toLocaleDateString('it-IT') + ' ' + new Date(f.t).toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'}) : '';
+async function fotoAll(progId) { const all = await DB.all('foto'); return all.filter(f => f.progId === progId); }
+async function fotoOfPart(pa) { const all = await DB.all('foto'); return all.filter(f => f.partId === pa.id && !f.del).sort((a, b) => (a.t || 0) - (b.t || 0)); }
+async function fotoRows(progId) {
+  const fs = (await fotoAll(progId)).filter(f => !f.del).sort((a, b) => (a.t || 0) - (b.t || 0));
+  return fs.map((f, i) => ({fid: i + 1, uuid: f.id, mod_ts: f.mod || f.t || 0, part_uuid: f.partId, file: fotoFile(f), didascalia: f.cap || null, operatore: f.op || null, data: f.t ? new Date(f.t).toISOString() : null, lat: f.lat != null && f.lat !== '' ? +f.lat : null, lon: f.lon != null && f.lon !== '' ? +f.lon : null}));
+}
+/* riallinea l'elenco pa.foto (ordine cronologico) con l'archivio */
+async function fotoRelink(partIds) {
+  const all = await DB.all('foto');
+  for (const id of partIds) {
+    const pa = S.particelle.find(x => x.id === id); if (!pa) continue;
+    const ids = all.filter(f => f.partId === id && !f.del).sort((a, b) => (a.t || 0) - (b.t || 0)).map(f => f.id);
+    if (JSON.stringify(ids) !== JSON.stringify(pa.foto || [])) { pa.foto = ids; await DB.put('particelle', pa); }
+  }
+}
+/* unione con la tabella del cloud: rows = righe remote, base = righe dell'ultimo file noto (null se assente) */
+async function fotoMerge(rows, base, progId) {
+  const loc = await fotoAll(progId); const L = new Map(loc.map(f => [f.id, f]));
+  const B = new Map((base || []).map(r => [r.uuid, r])); const Rm = new Map(rows.filter(r => r.uuid).map(r => [r.uuid, r]));
+  const touched = new Set(); let chg = 0, nuove = 0;
+  for (const [id, r] of Rm) {
+    const l = L.get(id);
+    if (!l) {
+      if (B.has(id)) continue; // eliminata qui, non ancora tolta dal cloud
+      const f = {id, partId: r.part_uuid || '', progId, data: '', t: r.data ? Date.parse(r.data) : (r.mod_ts || Date.now()), cap: r.didascalia || '', op: r.operatore || '', lat: r.lat ?? '', lon: r.lon ?? '', mod: r.mod_ts || 0};
+      await DB.put('foto', f); touched.add(f.partId); nuove++; chg++; continue;
+    }
+    if (l.del) continue;
+    if ((r.mod_ts || 0) > (l.mod || 0) && (r.didascalia || '') !== (l.cap || '')) { l.cap = r.didascalia || ''; l.mod = r.mod_ts; await DB.put('foto', l); chg++; }
+  }
+  for (const [id, l] of L) {
+    if (Rm.has(id) || l.del) continue;
+    if (B.has(id)) { await DB.del('foto', id); touched.add(l.partId); chg++; } // eliminata da un altro operatore
+  }
+  await fotoRelink([...touched]);
+  return {chg, nuove, touched};
+}
+/* invio/ricezione dei file foto sul progetto QFieldCloud (dopo il GeoPackage) */
+async function fotoPush(prog, files, log = () => {}) {
+  const have = new Set(files.map(f => f.name)); let up = 0, rm = 0;
+  for (const f of await fotoAll(prog.id)) {
+    if (f.del) {
+      if (have.has(fotoFile(f))) { try { await QFC.remove(prog.qfc_pid, fotoFile(f)); rm++; } catch (e) { if (!/404/.test(e.message)) { console.warn(e); continue; } } }
+      await DB.del('foto', f.id); continue;
+    }
+    if (!f.data || have.has(fotoFile(f))) continue;
+    try { await QFC.upload(prog.qfc_pid, fotoFile(f), b64ToU8(f.data.split(',')[1]), 'image/jpeg'); up++; } catch (e) { console.warn('foto', e); log('Foto non inviata: ' + e.message); }
+  }
+  if (up || rm) log(`Foto: ${up} inviate${rm ? ', ' + rm + ' eliminate' : ''}.`);
+  return up + rm;
+}
+async function fotoPull(prog, files, log = () => {}) {
+  const have = new Set(files.map(f => f.name)); let n = 0; const touched = new Set();
+  for (const f of await fotoAll(prog.id)) {
+    if (f.data || f.del || !have.has(fotoFile(f))) continue;
+    try { const u8 = await QFC.download(prog.qfc_pid, fotoFile(f)); f.data = 'data:image/jpeg;base64,' + u8ToB64(u8); await DB.put('foto', f); touched.add(f.partId); n++; }
+    catch (e) { console.warn('foto', e); }
+  }
+  if (n) { log(`Foto: ${n} ricevute.`); if (typeof loadFoto === 'function') loadFoto(); }
+  return n;
+}
+/* galleria nella scheda: miniature in ordine di data, didascalia modificabile, eliminazione */
+async function fotoGallery(pa) {
+  const fs = await fotoOfPart(pa); if (!fs.length) return '<span class="muted">Nessuna foto</span>';
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;width:100%">` + fs.map((f, i) => `<div style="position:relative">
+    ${f.data ? `<img src="${f.data}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px" onclick="A.fotoBig('${f.id}')">` : `<div class="muted" style="width:100%;aspect-ratio:1;border-radius:8px;background:#eee;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px">In arrivo dal cloud</div>`}
+    <button class="chip" style="position:absolute;top:2px;right:2px;min-height:28px;padding:2px 8px" onclick="A.delFoto('${f.id}')">✕</button>
+    <div class="muted" style="font-size:11px;margin-top:2px">${i + 1}. ${esc(fotoDate(f))}${f.op ? ' · ' + esc(f.op) : ''}</div>
+    <input value="${esc(f.cap || '')}" placeholder="Didascalia" style="width:100%;font-size:12px;padding:4px 6px;margin-top:2px" onchange="A.fotoCap('${f.id}',this.value)"></div>`).join('') + '</div>';
+}
+
+/* ============================================================
+   Grafici per i report (canvas → PNG). Modulo comune a PAF Campo e Martellata Campo.
+   Ogni funzione restituisce {png: Uint8Array, url: dataURL, w, h} (dimensioni in px a 2x per la stampa).
+   ============================================================ */
+const GR_COL = ['#2f6b2a', '#c98a1f', '#3b6fb6', '#b5443b', '#7a5c9e', '#2a9d8f', '#8c8c3b', '#d4765a', '#5b7f95', '#9b6b3c'];
+const grNum = (v, d = 0) => (v == null || v === '' || isNaN(v)) ? '' : Number(v).toLocaleString('it-IT', {minimumFractionDigits: d, maximumFractionDigits: d});
+function grNice(max) { // limite superiore "bello" dell'asse
+  if (!(max > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(max))); const m = max / p;
+  const n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
+  return n * p;
+}
+function grCanvas(w, h) {
+  const cv = document.createElement('canvas'); cv.width = w * 2; cv.height = h * 2;
+  const c = cv.getContext('2d'); c.scale(2, 2); c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
+  c.font = '12px Arial, Helvetica, sans-serif'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+  return {cv, c};
+}
+function grOut(cv) {
+  const url = cv.toDataURL('image/png'); const b = atob(url.split(',')[1]); const u8 = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u8[i] = b.charCodeAt(i);
+  return {png: u8, url, w: cv.width / 2, h: cv.height / 2};
+}
+function grWrap(c, text, maxW) {
+  const words = String(text).split(/\s+/); const lines = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (c.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+function grLegend(c, series, x, y, maxW) { // legenda orizzontale a capo; restituisce l'altezza usata
+  c.font = '11px Arial, Helvetica, sans-serif'; let cx = x, cy = y; const lh = 16;
+  series.forEach((s, i) => {
+    const w = 14 + c.measureText(s.name).width + 12;
+    if (cx + w > x + maxW && cx > x) { cx = x; cy += lh; }
+    c.fillStyle = s.color || GR_COL[i % GR_COL.length]; c.fillRect(cx, cy - 5, 10, 10);
+    c.fillStyle = '#222'; c.textAlign = 'left'; c.fillText(s.name, cx + 14, cy); cx += w;
+  });
+  return cy - y + lh;
+}
+
+/* Barre: labels = categorie sull'asse x; series = [{name, values, color}]; opt = {title, xLabel, yLabel, stacked, w, h, dec, values:true} */
+function chartBars(labels, series, opt = {}) {
+  const W = opt.w || 640, H = opt.h || 360; const {cv, c} = grCanvas(W, H);
+  const multi = series.length > 1; const stacked = !!opt.stacked;
+  let top = 10;
+  if (opt.title) { c.font = 'bold 14px Arial, Helvetica, sans-serif'; c.fillStyle = '#1b1b1b'; c.textAlign = 'center'; c.fillText(opt.title, W / 2, top + 8); top += 26; }
+  if (multi || opt.legend) top += grLegend(c, series, 60, top + 6, W - 80) + 2;
+  const L = 58, R = 16, B = opt.xLabel ? 52 : 36; const pw = W - L - R, ph = H - top - B;
+  const n = labels.length; const vals = stacked ? labels.map((_, i) => series.reduce((s, q) => s + (+q.values[i] || 0), 0)) : series.flatMap(q => q.values.map(v => +v || 0));
+  const max = grNice(Math.max(0, ...vals) * 1.05); const dec = opt.dec ?? 0;
+  // griglia e asse y
+  c.strokeStyle = '#e3e3e3'; c.lineWidth = 1; c.fillStyle = '#444'; c.font = '11px Arial, Helvetica, sans-serif'; c.textAlign = 'right';
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) { const v = max / ticks * i; const y = top + ph - v / max * ph; c.beginPath(); c.moveTo(L, y); c.lineTo(L + pw, y); c.stroke(); c.fillText(grNum(v, max < 10 ? 1 : 0), L - 6, y); }
+  c.strokeStyle = '#888'; c.beginPath(); c.moveTo(L, top); c.lineTo(L, top + ph); c.lineTo(L + pw, top + ph); c.stroke();
+  // barre
+  const gw = pw / Math.max(1, n); const inner = Math.min(gw * 0.72, 90 * Math.max(1, stacked ? 1 : series.length)); const bw = (multi && !stacked) ? inner / series.length : inner;
+  labels.forEach((lab, i) => {
+    const x0 = L + i * gw + (gw - inner) / 2; let acc = 0;
+    series.forEach((s, j) => {
+      const v = +s.values[i] || 0; if (!v && !stacked) return;
+      const h = v / max * ph; c.fillStyle = s.color || GR_COL[j % GR_COL.length];
+      if (stacked) { c.fillRect(x0, top + ph - (acc + v) / max * ph, inner, h); acc += v; }
+      else { const x = x0 + j * bw; c.fillRect(x, top + ph - h, bw - (multi ? 1 : 0), h);
+        if (opt.values && n * series.length <= 24) { c.fillStyle = '#333'; c.font = '10px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.fillText(grNum(v, dec), x + bw / 2, top + ph - h - 7); } }
+    });
+    if (stacked && opt.values && n <= 30 && acc) { c.fillStyle = '#333'; c.font = '10px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.fillText(grNum(acc, dec), x0 + inner / 2, top + ph - acc / max * ph - 7); }
+    // etichetta x
+    c.fillStyle = '#333'; c.font = '11px Arial, Helvetica, sans-serif'; c.textAlign = 'center';
+    const step = n > 24 ? 3 : n > 14 ? 2 : 1;
+    if (i % step === 0) { const ls = grWrap(c, lab, gw * step - 2).slice(0, 2); ls.forEach((t, k) => c.fillText(t, x0 + inner / 2, top + ph + 12 + k * 13)); }
+  });
+  c.fillStyle = '#333'; c.font = '11px Arial, Helvetica, sans-serif';
+  if (opt.xLabel) { c.textAlign = 'center'; c.fillText(opt.xLabel, L + pw / 2, H - 10); }
+  if (opt.yLabel) { c.save(); c.translate(14, top + ph / 2); c.rotate(-Math.PI / 2); c.textAlign = 'center'; c.fillText(opt.yLabel, 0, 0); c.restore(); }
+  return grOut(cv);
+}
+
+/* Torta/anello: items = [{name, value, color}]; opt = {title, w, h, unit, dec} */
+function chartPie(items, opt = {}) {
+  const W = opt.w || 520, H = opt.h || 320; const {cv, c} = grCanvas(W, H);
+  let top = 8; if (opt.title) { c.font = 'bold 14px Arial, Helvetica, sans-serif'; c.fillStyle = '#1b1b1b'; c.textAlign = 'center'; c.fillText(opt.title, W / 2, top + 8); top += 28; }
+  const data = items.filter(x => +x.value > 0).sort((a, b) => b.value - a.value); const tot = data.reduce((s, x) => s + +x.value, 0);
+  const r = Math.min((H - top - 16) / 2, W * 0.26); const cx = r + 24, cy = top + (H - top) / 2;
+  let a = -Math.PI / 2;
+  data.forEach((d, i) => {
+    const ang = d.value / tot * 2 * Math.PI; c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, r, a, a + ang); c.closePath();
+    c.fillStyle = d.color || GR_COL[i % GR_COL.length]; c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.stroke();
+    if (ang > 0.25) { const m = a + ang / 2; c.fillStyle = '#fff'; c.font = 'bold 11px Arial, Helvetica, sans-serif'; c.textAlign = 'center'; c.fillText(grNum(d.value / tot * 100, 0) + '%', cx + Math.cos(m) * r * 0.62, cy + Math.sin(m) * r * 0.62); }
+    a += ang;
+  });
+  // legenda a destra con valori
+  const lx = cx + r + 26; let ly = top + 14; c.font = '11px Arial, Helvetica, sans-serif'; c.textAlign = 'left';
+  data.slice(0, 12).forEach((d, i) => {
+    c.fillStyle = d.color || GR_COL[i % GR_COL.length]; c.fillRect(lx, ly - 5, 10, 10); c.fillStyle = '#222';
+    const t = `${d.name}  ${grNum(d.value, opt.dec ?? 1)}${opt.unit ? ' ' + opt.unit : ''} (${grNum(d.value / tot * 100, 0)}%)`;
+    c.fillText(grWrap(c, t, W - lx - 10)[0], lx + 14, ly); ly += 17;
+  });
+  return grOut(cv);
+}
+
+/* Linee: x = valori numerici o etichette; series = [{name, values, color}]; opt = {title, xLabel, yLabel, points} */
+function chartLines(xs, series, opt = {}) {
+  const W = opt.w || 640, H = opt.h || 340; const {cv, c} = grCanvas(W, H);
+  let top = 10; if (opt.title) { c.font = 'bold 14px Arial, Helvetica, sans-serif'; c.fillStyle = '#1b1b1b'; c.textAlign = 'center'; c.fillText(opt.title, W / 2, top + 8); top += 26; }
+  if (series.length > 1) top += grLegend(c, series, 60, top + 6, W - 80) + 2;
+  const L = 58, R = 16, B = opt.xLabel ? 52 : 36; const pw = W - L - R, ph = H - top - B;
+  const max = grNice(Math.max(0, ...series.flatMap(s => s.values.map(v => +v || 0))) * 1.05);
+  const numeric = xs.every(x => !isNaN(+x)); const xmin = numeric ? Math.min(...xs.map(Number)) : 0, xmax = numeric ? Math.max(...xs.map(Number)) : xs.length - 1;
+  const X = i => L + (numeric ? (xs[i] - xmin) / ((xmax - xmin) || 1) : i / Math.max(1, xs.length - 1)) * pw;
+  c.strokeStyle = '#e3e3e3'; c.lineWidth = 1; c.fillStyle = '#444'; c.font = '11px Arial, Helvetica, sans-serif'; c.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) { const v = max / 5 * i; const y = top + ph - v / max * ph; c.beginPath(); c.moveTo(L, y); c.lineTo(L + pw, y); c.stroke(); c.fillText(grNum(v, max < 10 ? 1 : 0), L - 6, y); }
+  c.strokeStyle = '#888'; c.beginPath(); c.moveTo(L, top); c.lineTo(L, top + ph); c.lineTo(L + pw, top + ph); c.stroke();
+  c.textAlign = 'center'; c.fillStyle = '#333'; const step = xs.length > 14 ? Math.ceil(xs.length / 10) : 1;
+  xs.forEach((x, i) => { if (i % step === 0) c.fillText(String(x), X(i), top + ph + 12); });
+  series.forEach((s, j) => {
+    const col = s.color || GR_COL[j % GR_COL.length]; c.strokeStyle = col; c.fillStyle = col; c.lineWidth = 2; c.beginPath();
+    s.values.forEach((v, i) => { const y = top + ph - (+v || 0) / max * ph; i ? c.lineTo(X(i), y) : c.moveTo(X(i), y); }); c.stroke();
+    if (opt.points !== false) s.values.forEach((v, i) => { c.beginPath(); c.arc(X(i), top + ph - (+v || 0) / max * ph, 3, 0, 7); c.fill(); });
+  });
+  c.fillStyle = '#333'; c.font = '11px Arial, Helvetica, sans-serif';
+  if (opt.xLabel) { c.textAlign = 'center'; c.fillText(opt.xLabel, L + pw / 2, H - 10); }
+  if (opt.yLabel) { c.save(); c.translate(14, top + ph / 2); c.rotate(-Math.PI / 2); c.textAlign = 'center'; c.fillText(opt.yLabel, 0, 0); c.restore(); }
+  return grOut(cv);
+}
+
+/* Barre orizzontali con intervallo di errore: items = [{name, value, err}]; opt = {title, xLabel, unit} */
+function chartErrBars(items, opt = {}) {
+  const W = opt.w || 640, H = opt.h || Math.max(160, 60 + items.length * 26); const {cv, c} = grCanvas(W, H);
+  let top = 10; if (opt.title) { c.font = 'bold 14px Arial, Helvetica, sans-serif'; c.fillStyle = '#1b1b1b'; c.textAlign = 'center'; c.fillText(opt.title, W / 2, top + 8); top += 26; }
+  const L = 110, R = 24, B = 34; const pw = W - L - R, ph = H - top - B; const rh = ph / Math.max(1, items.length);
+  const max = grNice(Math.max(0, ...items.map(x => (+x.value || 0) + (+x.err || 0))) * 1.05);
+  c.strokeStyle = '#e3e3e3'; c.lineWidth = 1; c.fillStyle = '#444'; c.font = '11px Arial, Helvetica, sans-serif'; c.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) { const v = max / 5 * i; const x = L + v / max * pw; c.beginPath(); c.moveTo(x, top); c.lineTo(x, top + ph); c.stroke(); c.fillText(grNum(v, max < 10 ? 1 : 0), x, top + ph + 12); }
+  items.forEach((it, i) => {
+    const y = top + i * rh + rh * 0.15, h = rh * 0.7; const v = +it.value || 0, e = +it.err || 0;
+    c.fillStyle = it.color || GR_COL[0]; c.fillRect(L, y, v / max * pw, h);
+    if (e) { c.strokeStyle = '#222'; c.lineWidth = 1.5; const x1 = L + Math.max(0, v - e) / max * pw, x2 = L + (v + e) / max * pw, ym = y + h / 2; c.beginPath(); c.moveTo(x1, ym); c.lineTo(x2, ym); c.moveTo(x1, ym - 4); c.lineTo(x1, ym + 4); c.moveTo(x2, ym - 4); c.lineTo(x2, ym + 4); c.stroke(); }
+    c.fillStyle = '#222'; c.textAlign = 'right'; c.font = '11px Arial, Helvetica, sans-serif'; c.fillText(grWrap(c, it.name, L - 12)[0], L - 6, y + h / 2);
+    c.textAlign = 'left'; c.font = '10px Arial, Helvetica, sans-serif'; c.fillText(grNum(v, opt.dec ?? 0) + (e ? ' ± ' + grNum(e, opt.dec ?? 0) : ''), L + (v + e) / max * pw + 5, y + h / 2);
+  });
+  c.strokeStyle = '#888'; c.beginPath(); c.moveTo(L, top); c.lineTo(L, top + ph); c.stroke();
+  if (opt.xLabel) { c.fillStyle = '#333'; c.textAlign = 'center'; c.font = '11px Arial, Helvetica, sans-serif'; c.fillText(opt.xLabel, L + pw / 2, H - 6); }
+  return grOut(cv);
+}
+
+/* ============================================================
+   Generatore di documenti comune (Word .docx e PDF) a partire da una lista di blocchi.
+   Blocchi: {t:'title', lines:[{text,size,b}]} · {t:'h', lvl, text} · {t:'p', text, b, i, small, center}
+            {t:'kv', rows:[[k,v],...], cols:2|4} · {t:'table', head, rows, foot, caption, small, align:[..]}
+            {t:'img', url, w, h, caption, width (mm)} · {t:'photos', items:[{url, cap, w, h}], cols}
+            {t:'br'} · {t:'hr'}
+   Usa docx@8 (Word) e jspdf@2 + autotable (PDF): caricati al momento.
+   ============================================================ */
+const DG = {
+  mm: 210, margin: 18, font: 'Calibri', color: '2f6b2a', line: '9AA58F',
+  async docx(blocks, meta = {}) {
+    await loadScript(libUrl('docx@8.5.0/build/index.umd.js')); const D = window.docx;
+    const PT = 2; const F = DG.font; const C = []; const pw = DG.mm - 2 * DG.margin;
+    const run = (text, o = {}) => new D.TextRun({text: String(text ?? ''), bold: o.b, italics: o.i, size: (o.size || 11) * PT, font: F, color: o.color});
+    const par = (text, o = {}) => new D.Paragraph({children: [run(text, o)], alignment: o.center ? D.AlignmentType.CENTER : o.right ? D.AlignmentType.RIGHT : D.AlignmentType.LEFT, spacing: {after: o.after ?? 100, before: o.before ?? 0}, keepNext: o.keepNext});
+    const border = {style: D.BorderStyle.SINGLE, size: 4, color: DG.line};
+    const borders = {top: border, bottom: border, left: border, right: border};
+    const cell = (t, o = {}) => new D.TableCell({children: [new D.Paragraph({children: [run(t, {b: o.b, size: o.size || 9})], alignment: o.right ? D.AlignmentType.RIGHT : D.AlignmentType.LEFT})], shading: o.head ? {fill: 'E8EFE3'} : o.tot ? {fill: 'F4F4F4'} : undefined, borders, width: o.w ? {size: o.w, type: D.WidthType.PERCENTAGE} : undefined, verticalAlign: D.VerticalAlign.CENTER, margins: {top: 40, bottom: 40, left: 70, right: 70}});
+    const isNum = v => typeof v === 'number' || /^-?[\d.]+(,\d+)?( ?%)?$/.test(String(v ?? '').trim());
+    const table = (head, rows, foot, o = {}) => new D.Table({width: {size: 100, type: D.WidthType.PERCENTAGE},
+      rows: [new D.TableRow({tableHeader: true, cantSplit: true, children: head.map(h => cell(h, {b: true, head: true, size: o.small ? 8 : 9}))}),
+        ...rows.map(r => new D.TableRow({cantSplit: true, children: r.map((v, i) => cell(v, {right: i > 0 && isNum(v), size: o.small ? 8 : 9}))})),
+        ...(foot ? [new D.TableRow({cantSplit: true, children: foot.map((v, i) => cell(v, {b: true, tot: true, right: i > 0 && isNum(v), size: o.small ? 8 : 9}))})] : [])]});
+    const img = (b, wmm) => { const w = Math.min(wmm || b.width || pw, pw); const h = w * b.h / b.w; return new D.ImageRun({data: b.png || b64ToU8(b.url.split(',')[1]), transformation: {width: w * 3.78, height: h * 3.78}}); };
+    for (const b of blocks) {
+      if (b.t === 'title') { C.push(new D.Paragraph({spacing: {before: 2000}})); b.lines.forEach(l => C.push(par(l.text, {b: l.b, size: l.size || 14, center: true, after: l.after ?? 200}))); C.push(new D.Paragraph({children: [new D.PageBreak()]})); }
+      else if (b.t === 'h') C.push(new D.Paragraph({children: [run(b.text, {b: true, size: b.lvl === 1 ? 16 : b.lvl === 2 ? 13 : 11, color: b.lvl <= 2 ? DG.color : undefined})], heading: b.lvl === 1 ? D.HeadingLevel.HEADING_1 : b.lvl === 2 ? D.HeadingLevel.HEADING_2 : D.HeadingLevel.HEADING_3, spacing: {before: b.lvl === 1 ? 300 : 200, after: 120}, keepNext: true, pageBreakBefore: !!b.pageBreak}));
+      else if (b.t === 'p') String(b.text ?? '').split(/\n\s*\n/).forEach(t => C.push(par(t, {b: b.b, i: b.i, size: b.small ? 9 : 11, center: b.center, after: b.small ? 60 : 120})));
+      else if (b.t === 'kv') {
+        const cols = b.cols || 2; const n = Math.ceil(b.rows.length / (cols / 2)); const trs = [];
+        for (let i = 0; i < n; i++) { const cs = []; for (let k = 0; k < cols / 2; k++) { const r = b.rows[i + k * n]; cs.push(cell(r ? r[0] : '', {b: true, head: true, w: 100 / cols * 0.8}), cell(r ? r[1] : '', {w: 100 / cols * 1.2})); } trs.push(new D.TableRow({cantSplit: true, children: cs})); }
+        C.push(new D.Table({width: {size: 100, type: D.WidthType.PERCENTAGE}, rows: trs})); C.push(par('', {after: 80}));
+      }
+      else if (b.t === 'table') { C.push(table(b.head, b.rows, b.foot, b)); if (b.caption) C.push(par(b.caption, {i: true, size: 9, before: 60, after: 160})); else C.push(par('', {after: 80})); }
+      else if (b.t === 'img') { C.push(new D.Paragraph({children: [img(b, b.width)], alignment: D.AlignmentType.CENTER, keepNext: true, spacing: {before: 80}})); if (b.caption) C.push(par(b.caption, {i: true, size: 9, center: true, after: 160})); }
+      else if (b.t === 'photos') {
+        const cols = b.cols || 2; const wmm = (pw - 4 * (cols - 1)) / cols; const trs = [];
+        for (let i = 0; i < b.items.length; i += cols) {
+          const row = b.items.slice(i, i + cols);
+          trs.push(new D.TableRow({cantSplit: true, children: Array.from({length: cols}, (_, k) => { const it = row[k]; const ch = it ? [new D.Paragraph({children: [img(Object.assign({}, it, {w: it.w || 4, h: it.h || 3}), wmm)], alignment: D.AlignmentType.CENTER}), par(it.cap || '', {size: 8, center: true, after: 120})] : [new D.Paragraph('')]; return new D.TableCell({children: ch, width: {size: 100 / cols, type: D.WidthType.PERCENTAGE}, borders: {top: {style: D.BorderStyle.NONE}, bottom: {style: D.BorderStyle.NONE}, left: {style: D.BorderStyle.NONE}, right: {style: D.BorderStyle.NONE}}}); })}));
+        }
+        C.push(new D.Table({width: {size: 100, type: D.WidthType.PERCENTAGE}, rows: trs}));
+      }
+      else if (b.t === 'br') C.push(new D.Paragraph({children: [new D.PageBreak()]}));
+      else if (b.t === 'hr') C.push(new D.Paragraph({border: {bottom: {style: D.BorderStyle.SINGLE, size: 6, color: DG.line}}, spacing: {after: 120}}));
+      else if (b.t === 'toc') { C.push(new D.TableOfContents('Indice', {hyperlink: true, headingStyleRange: '1-2'})); C.push(new D.Paragraph({children: [new D.PageBreak()]})); }
+    }
+    const foot = meta.footer ? new D.Footer({children: [new D.Paragraph({children: [run(meta.footer + ' – pag. ', {size: 8, color: '666666'}), new D.TextRun({children: [D.PageNumber.CURRENT], size: 16, font: F, color: '666666'})], alignment: D.AlignmentType.CENTER})]}) : undefined;
+    const doc = new D.Document({creator: meta.creator || 'PAF Campo', title: meta.title || '', styles: {default: {document: {run: {font: F, size: 22}}}, paragraphStyles: [
+      {id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: {size: 32, bold: true, font: F, color: DG.color}, paragraph: {spacing: {before: 300, after: 120}}},
+      {id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: {size: 26, bold: true, font: F, color: DG.color}, paragraph: {spacing: {before: 200, after: 100}}},
+      {id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: {size: 22, bold: true, font: F}, paragraph: {spacing: {before: 160, after: 80}}}]},
+      sections: [{properties: {page: {margin: {top: 1000, right: DG.margin * 56.7, bottom: 1000, left: DG.margin * 56.7}}}, footers: foot ? {default: foot} : undefined, children: C}]});
+    return D.Packer.toBlob(doc);
+  },
+
+  async pdf(blocks, meta = {}) {
+    await loadScript(libUrl('jspdf@2.5.1/dist/jspdf.umd.min.js'));
+    await loadScript(libUrl('jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js'));
+    const J = window.jspdf.jsPDF; const doc = new J({unit: 'mm', format: 'a4', compress: true});
+    const W = DG.mm, H = 297, M = DG.margin, pw = W - 2 * M, bottom = 282; let y = 20;
+    const T = s => String(s ?? '').replace(/²/g, '2').replace(/³/g, '3').replace(/≥/g, '>=').replace(/≤/g, '<=').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/→/g, '->').replace(/✓/g, 'OK').replace(/–/g, '-').replace(/—/g, '-').replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x00-\xFF€]/g, '');
+    const need = h => { if (y + h > bottom) { doc.addPage(); y = 20; } };
+    const text = (t, o = {}) => {
+      doc.setFont('helvetica', o.b ? 'bold' : o.i ? 'italic' : 'normal'); doc.setFontSize(o.size || 10.5); if (Array.isArray(o.color)) doc.setTextColor(o.color[0], o.color[1], o.color[2]); else doc.setTextColor(30);
+      const lines = doc.splitTextToSize(T(t), pw); const lh = (o.size || 10.5) * 0.42;
+      need(lines.length * lh); doc.text(lines, o.center ? W / 2 : o.right ? W - M : M, y, {align: o.center ? 'center' : o.right ? 'right' : 'left'}); y += lines.length * lh + (o.after ?? 2);
+      doc.setTextColor(30);
+    };
+    const [rc, gc, bc] = [parseInt(DG.color.slice(0, 2), 16), parseInt(DG.color.slice(2, 4), 16), parseInt(DG.color.slice(4, 6), 16)];
+    const table = (b) => {
+      doc.autoTable({startY: y, head: [b.head.map(T)], body: b.rows.map(r => r.map(T)), foot: b.foot ? [b.foot.map(T)] : undefined, theme: 'grid', margin: {left: M, right: M, bottom: 297 - bottom},
+        styles: {fontSize: b.small ? 7 : 8, cellPadding: 1.1, lineColor: [154, 165, 143], lineWidth: 0.15, textColor: 30, overflow: 'linebreak'},
+        headStyles: {fillColor: [232, 239, 227], textColor: 30, fontStyle: 'bold'}, footStyles: {fillColor: [244, 244, 244], textColor: 30, fontStyle: 'bold'},
+        columnStyles: Object.fromEntries(b.head.map((_, i) => [i, {halign: i > 0 && (b.align ? b.align[i] === 'r' : b.rows.every(r => r[i] === '' || r[i] == null || /^-?[\d.]+(,\d+)?( ?%)?$/.test(String(r[i]).trim()))) ? 'right' : 'left'}])),
+        didDrawPage: () => {}});
+      y = doc.lastAutoTable.finalY + 2;
+      if (b.caption) text(b.caption, {i: true, size: 8.5, after: 4}); else y += 2;
+    };
+    const image = (b, wmm, x) => { const w = Math.min(wmm || b.width || pw, pw); const h = w * b.h / b.w; need(h + 2); doc.addImage(b.url, 'PNG', x ?? (M + (pw - w) / 2), y, w, h); y += h + 2; };
+    for (const b of blocks) {
+      if (b.t === 'title') { y = 80; b.lines.forEach(l => text(l.text, {b: l.b, size: (l.size || 14) * 1.15, center: true, after: (l.after ?? 200) / 30})); doc.addPage(); y = 20; }
+      else if (b.t === 'h') { if (b.pageBreak && y > 24) { doc.addPage(); y = 20; } need(14); y += b.lvl === 1 ? 3 : 2; text(b.text, {b: true, size: b.lvl === 1 ? 15 : b.lvl === 2 ? 12.5 : 11, color: b.lvl <= 2 ? [rc, gc, bc] : undefined, after: 2.5}); if (b.lvl === 1) { doc.setDrawColor(154, 165, 143); doc.line(M, y - 0.5, W - M, y - 0.5); y += 3; } }
+      else if (b.t === 'p') String(b.text ?? '').split(/\n\s*\n/).forEach(t => text(t, {b: b.b, i: b.i, size: b.small ? 8.5 : 10.5, center: b.center, after: b.small ? 1.5 : 2.5}));
+      else if (b.t === 'kv') {
+        const cols = b.cols || 2; const n = Math.ceil(b.rows.length / (cols / 2)); const body = [];
+        for (let i = 0; i < n; i++) { const r = []; for (let k = 0; k < cols / 2; k++) { const kv = b.rows[i + k * n]; r.push(kv ? kv[0] : '', kv ? kv[1] : ''); } body.push(r.map(T)); }
+        const cs = {}; for (let k = 0; k < cols; k++) cs[k] = k % 2 === 0 ? {fontStyle: 'bold', fillColor: [232, 239, 227], cellWidth: pw / cols * 0.8} : {cellWidth: pw / cols * 1.2};
+        doc.autoTable({startY: y, body, theme: 'grid', margin: {left: M, right: M, bottom: 297 - bottom}, styles: {fontSize: 8, cellPadding: 1.1, lineColor: [154, 165, 143], lineWidth: 0.15, textColor: 30}, columnStyles: cs});
+        y = doc.lastAutoTable.finalY + 4;
+      }
+      else if (b.t === 'table') table(b);
+      else if (b.t === 'img') { image(b, b.width); if (b.caption) text(b.caption, {i: true, size: 8.5, center: true, after: 4}); }
+      else if (b.t === 'photos') {
+        const cols = b.cols || 2; const gap = 4; const wmm = (pw - gap * (cols - 1)) / cols;
+        for (let i = 0; i < b.items.length; i += cols) {
+          const row = b.items.slice(i, i + cols); const hs = row.map(it => wmm * (it.h || 3) / (it.w || 4)); const hmax = Math.max(...hs);
+          need(hmax + 12); const y0 = y;
+          row.forEach((it, k) => { const x = M + k * (wmm + gap); const h = hs[k]; doc.addImage(it.url, 'JPEG', x, y0, wmm, h); doc.setFontSize(8); doc.setFont('helvetica', 'normal'); const ls = doc.splitTextToSize(T(it.cap || ''), wmm); doc.text(ls, x + wmm / 2, y0 + h + 3.5, {align: 'center'}); });
+          y = y0 + hmax + 10;
+        }
+      }
+      else if (b.t === 'br') { doc.addPage(); y = 20; }
+      else if (b.t === 'hr') { doc.setDrawColor(154, 165, 143); doc.line(M, y, W - M, y); y += 3; }
+    }
+    const n = doc.getNumberOfPages();
+    for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(7.5); doc.setTextColor(110); doc.text(T(`${meta.footer || ''}${meta.footer ? ' – ' : ''}pag. ${i}/${n}`), W / 2, 291, {align: 'center'}); }
+    return doc.output('blob');
+  }
+};
+const DG_MIME = {docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pdf: 'application/pdf'};
+
+/* ============================================================
+   Report delle aree di saggio (Word e PDF): quadro generale del piano, dettaglio per particella
+   con tabelle per area, composizione, distribuzione diametrica, errore di stima e piedilista.
+   ============================================================ */
+const f0 = x => fmt(x, 0), f1 = x => fmt(x, 1), f2 = x => fmt(x, 2);
+const spNome = sp => sp + (SP[sp] && SP[sp].nome ? ' ' + SP[sp].nome : '');
+const dIt = t => t ? new Date(t).toLocaleDateString('it-IT') : '';
+const supPart = x => num(x.sup_bosc) || num(x.sup_tot) || 0;
+
+/* dati per i grafici di una particella: classi diametriche × specie (N/ha) */
+function adsDistData(s, maxSp = 6) {
+  const cs = Object.keys(s.byC).map(Number).sort((a, b) => a - b);
+  const sps = Object.entries(s.bySp).sort((a, b) => b[1].N - a[1].N).map(x => x[0]);
+  return {cs, sps: sps.slice(0, maxSp), altre: sps.slice(maxSp)};
+}
+function rilBySpClass(rs, pa, cur) { // N/ha per specie e classe, media sui rilievi (come partStats)
+  const list = rs.map(r => rilPerHa(r, pa, cur)); const n = list.length || 1; const o = {};
+  rs.forEach((r, i) => { const area = areaRil(r, pa); for (const k in (r.tally || {})) { const [sp, c, st] = k.split('|'); if (st === 'S') continue; const d = +c; const inner = r.tipo === 'ads' && num(r.rin) && num(r.dsoglia) && d < num(r.dsoglia); const nha = r.tipo === 'rel' ? r.tally[k] * (num(r.baf) || 1) / gOf(d) : area ? r.tally[k] / (inner ? Math.PI * num(r.rin) ** 2 / 10000 : area) : 0; o[sp] = o[sp] || {}; o[sp][d] = (o[sp][d] || 0) + nha / n; } });
+  return o;
+}
+
+function adsBlocksPart(p, x, s, cur, opt = {}) {
+  const B = []; const rs = rilOf(x.id).filter(r => Object.keys(r.tally || {}).length);
+  if (!opt.noHead) B.push({t: 'h', lvl: 2, text: `${unitName(x, p)}${x.localita ? ' – ' + x.localita : ''}`, pageBreak: !!opt.pageBreak});
+  if (!opt.noHead) B.push({t: 'kv', cols: 4, rows: [['Superficie boscata', f2(supPart(x)) + ' ha'], ['Governo', x.governo || '–'], ['Categoria', x.categoria || '–'], ['Stadio', x.stadio || '–'], ['Struttura', x.struttura || '–'], ['Rilievi', `${s.n} ${s.tipo === 'totale' ? 'cavallettamento totale' : rs.every(r => r.tipo === 'rel') ? 'punti relascopici' : 'aree di saggio'}`], ['Piante misurate', String(s.trees)], ['Diametro medio dg', f1(s.dg) + ' cm']]});
+  // tabella per rilievo
+  const perRil = rs.map(r => ({r, o: rilPerHa(r, x, cur)}));
+  if (s.tipo !== 'totale') {
+    B.push({t: 'table', small: true, head: ['Rilievo', 'Raggio m', 'Sup. m²', 'Operatore', 'Data', 'Piante', 'N/ha', 'G m²/ha', 'V m³/ha', 'dg cm'],
+      rows: perRil.map(({r, o}) => [rilName(r), r.tipo === 'ads' ? f2(num(r.raggio)) + (num(r.rin) ? ` (int. ${f2(num(r.rin))})` : '') : r.tipo === 'rel' ? 'BAF ' + f1(num(r.baf) || 1) : '', r.tipo === 'ads' ? f0(areaRil(r, x) * 10000) : '', r.op || '', dIt(r.t0), String(o.trees), f0(o.N), f1(o.G), f0(o.V), o.N ? f1(Math.sqrt(o.G / o.N * 40000 / Math.PI)) : '']),
+      foot: ['Media', '', '', '', '', String(s.trees), f0(s.N), f1(s.G), f0(s.V), f1(s.dg)], caption: `Tabella – Rilievi dendrometrici ${TX('della', p)} ${x.num}${x.sub || ''}: valori a ettaro per ogni unità di campionamento.`});
+    if (perRil.length > 1) B.push({t: 'img', ...chartBars(perRil.map(q => rilName(q.r)), [{name: 'N/ha', values: perRil.map(q => q.o.N)}, {name: 'G m²/ha ×10', values: perRil.map(q => q.o.G * 10)}, {name: 'V m³/ha', values: perRil.map(q => q.o.V)}], {title: 'Confronto fra le unità di campionamento', values: true, h: 300}), width: 150, caption: 'Figura – N/ha, G (×10) e V/ha nelle singole unità di campionamento.'});
+  } else B.push({t: 'p', small: true, text: `Cavallettamento totale su ${f2(s.sup)} ha${rs.length > 1 ? ' (' + rs.length + ' porzioni)' : ''}: ${s.trees} piante misurate.`});
+  // errore di stima
+  if (s.n > 1 && s.tipo !== 'totale') B.push({t: 'p', small: true, text: `Errore di campionamento sul volume a ettaro (probabilità 95%, t di Student con ${s.n - 1} g.d.l.): ${f1(s.E)}% (coefficiente di variazione ${f0(s.cv)}%).${s.E > 15 ? ` Per scendere sotto il 15% servirebbero circa ${s.nNeed} unità di campionamento.` : ' Precisione adeguata (≤ 15%).'}`});
+  if (s.miss.size) B.push({t: 'p', small: true, i: true, text: `Volume non calcolato per mancanza di curva ipsometrica: ${[...s.miss].join(', ')}.`});
+  // specie
+  const spRows = Object.entries(s.bySp).sort((a, b) => b[1].G - a[1].G);
+  B.push({t: 'table', head: ['Specie', 'N/ha', '% N', 'G m²/ha', '% G', 'V m³/ha', '% V', 'dg cm'],
+    rows: spRows.map(([sp, b]) => [spNome(sp), f0(b.N), s.N ? f0(b.N / s.N * 100) : '', f2(b.G), s.G ? f0(b.G / s.G * 100) : '', f1(b.V), s.V ? f0(b.V / s.V * 100) : '', b.N ? f1(Math.sqrt(b.G / b.N * 40000 / Math.PI)) : '']),
+    foot: ['Totale', f0(s.N), '100', f2(s.G), '100', f1(s.V), '100', f1(s.dg)], caption: `Tabella – Composizione specifica ${TX('della', p)} ${x.num}${x.sub || ''} (valori a ettaro).${s.Ns ? ` Piante secche in piedi: ${f0(s.Ns)}/ha, ${f0(s.Vs)} m³/ha.` : ''}`});
+  // grafici: composizione e distribuzione
+  const {cs, sps, altre} = adsDistData(s);
+  const bySpC = rilBySpClass(s.tipo === 'totale' ? rs : rs, x, cur);
+  const series = sps.map(sp => ({name: spNome(sp), values: cs.map(c => (bySpC[sp] || {})[c] || 0)}));
+  if (altre.length) series.push({name: 'Altre', values: cs.map(c => altre.reduce((a, sp) => a + ((bySpC[sp] || {})[c] || 0), 0))});
+  if (s.tipo === 'totale') { // per il cavallettamento totale le distribuzioni derivano direttamente da byC
+    const tot = {}; rs.forEach(r => { for (const k in r.tally) { const [sp, c, st] = k.split('|'); if (st === 'S') continue; tot[sp] = tot[sp] || {}; tot[sp][+c] = (tot[sp][+c] || 0) + r.tally[k] / (s.sup || 1); } });
+    series.forEach((q, i) => { const sp = i < sps.length ? sps[i] : null; q.values = cs.map(c => sp ? ((tot[sp] || {})[c] || 0) : altre.reduce((a, z) => a + ((tot[z] || {})[c] || 0), 0)); });
+  }
+  if (cs.length) B.push({t: 'img', ...chartBars(cs.map(String), series, {title: 'Distribuzione diametrica (piante/ha)', stacked: true, xLabel: 'Classe diametrica (cm)', yLabel: 'piante/ha', h: 320}), width: 160, caption: `Figura – Distribuzione delle piante per classe diametrica e specie ${TX('nella', p)} ${x.num}${x.sub || ''}.`});
+  if (spRows.length > 1) B.push({t: 'img', ...chartPie(spRows.map(([sp, b]) => ({name: spNome(sp), value: s.V ? b.V : b.G})), {title: s.V ? 'Composizione per volume (m³/ha)' : 'Composizione per area basimetrica (m²/ha)', unit: s.V ? 'm³/ha' : 'm²/ha', dec: 1, w: 520, h: 280}), width: 130, caption: 'Figura – Composizione specifica.'});
+  // piedilista compatto per rilievo
+  if (opt.piedilista !== false) {
+    const sp2 = Object.keys(s.bySp).sort(); const rowsPl = [];
+    rs.forEach(r => { const cls = {}; for (const k in r.tally) { const [sp, c, st] = k.split('|'); if (!r.tally[k]) continue; const d = +c; cls[d] = cls[d] || {}; cls[d][sp] = (cls[d][sp] || 0) + r.tally[k]; if (st === 'S') { cls[d]._s = (cls[d]._s || 0) + r.tally[k]; } }
+      Object.keys(cls).map(Number).sort((a, b) => a - b).forEach(d => rowsPl.push([rilName(r), f0(d)].concat(sp2.map(sp => cls[d][sp] ? String(cls[d][sp]) : '')).concat([String(Object.keys(cls[d]).filter(k => k !== '_s').reduce((a, k) => a + cls[d][k], 0)), cls[d]._s ? String(cls[d]._s) : '']))); });
+    if (rowsPl.length) B.push({t: 'table', small: true, head: ['Rilievo', 'd cm'].concat(sp2).concat(['Tot.', 'di cui secche']), rows: rowsPl, caption: `Tabella – Piedilista ${TX('della', p)} ${x.num}${x.sub || ''}: numero di piante per classe diametrica e specie.`});
+  }
+  return B;
+}
+
+async function adsReportBlocks(progId, partIds) {
+  const p = S.progetti.find(x => x.id === progId); const cur = curves(progId);
+  let ps = partsOf(progId); if (partIds && partIds.length) ps = ps.filter(x => partIds.includes(x.id));
+  const rows = ps.map(x => ({x, s: partStats(x, cur)})).filter(q => q.s);
+  const B = [];
+  B.push({t: 'title', lines: [{text: 'PIANO DI ASSESTAMENTO FORESTALE', b: true, size: 18}, {text: p.nome || '', b: true, size: 15, after: 300}, {text: p.proprieta || '', size: 12}, {text: `Comune di ${p.comuni || ''} – Regione ${p.regione || ''}`, size: 11, after: 500}, {text: 'RILIEVI DENDROMETRICI E AREE DI SAGGIO', b: true, size: 14}, {text: 'Relazione con tabelle e grafici', size: 11, after: 500}, {text: `Il tecnico: ${p.tecnico || ''}`, size: 11}, {text: dIt(Date.now()), size: 10}]});
+  B.push({t: 'h', lvl: 1, text: '1. Metodo di rilievo'});
+  const nAds = rows.reduce((a, q) => a + rilOf(q.x.id).filter(r => r.tipo === 'ads' && Object.keys(r.tally || {}).length).length, 0);
+  const nRel = rows.reduce((a, q) => a + rilOf(q.x.id).filter(r => r.tipo === 'rel' && Object.keys(r.tally || {}).length).length, 0);
+  const nTot = rows.filter(q => q.s.tipo === 'totale').length; const nH = S.altezze.filter(h => h.progId === progId).length;
+  B.push({t: 'p', text: `I rilievi dendrometrici hanno interessato ${rows.length} ${rows.length === 1 ? TX('un', p) : TX('uns', p)} su ${partsOf(progId).length}, con ${nAds} aree di saggio circolari${nRel ? `, ${nRel} punti relascopici` : ''}${nTot ? ` e ${nTot} cavallettamenti totali` : ''}. Le piante sono state cavallettate per classi diametriche di ${f0(num(p.amp) || 5)} cm a partire da ${f0(num(p.cmin) || 10)} cm; le altezze (${nH} misure) hanno fornito le curve ipsometriche h = a + b·ln(d) per specie o per gruppo. I volumi derivano dalle tavole di cubatura INFC 2005 (o dalle tavole locali inserite) applicate alle classi diametriche con l'altezza stimata dalla curva. Le aree di saggio sono riportate a ettaro in base alla loro superficie; i valori ${TX('della', p)} sono la media delle unità di campionamento e l'errore di campionamento è calcolato sul volume a ettaro con la t di Student al 95%.`});
+  B.push({t: 'h', lvl: 1, text: '2. Quadro generale'});
+  const T = {sup: 0, V: 0, n: 0, trees: 0};
+  rows.forEach(q => { T.sup += supPart(q.x); T.V += q.s.Vtot; T.n += q.s.n; T.trees += q.s.trees; });
+  B.push({t: 'table', small: true, head: [TX('ua', p), TX('g', p) || 'Gruppo', 'Sup. ha', 'Rilievi', 'Piante', 'N/ha', 'G m²/ha', 'V m³/ha', 'dg cm', 'E %', 'V tot m³'],
+    rows: rows.map(({x, s}) => [x.num + (x.sub || ''), grpOf(x, p) || '', f2(supPart(x)), String(s.n), String(s.trees), f0(s.N), f1(s.G), f0(s.V), f1(s.dg), s.E ? f1(s.E) : (s.tipo === 'totale' ? 'tot.' : '–'), f0(s.Vtot)]),
+    foot: ['Totale', '', f2(T.sup), String(T.n), String(T.trees), '', '', T.sup ? f0(T.V / T.sup) : '', '', '', f0(T.V)], caption: 'Tabella 2.1 – Risultati dendrometrici per ' + TX('un', p) + ' (valori a ettaro; V tot = provvigione sulla superficie boscata). E% = errore di campionamento al 95%.'});
+  if (!TX('ga', p)) {} else {
+    const g = {}; rows.forEach(({x, s}) => { const k = grpOf(x, p) || '—'; const c = g[k] = g[k] || {sup: 0, V: 0, n: 0}; c.n++; c.sup += supPart(x); c.V += s.Vtot; });
+    B.push({t: 'table', head: [TX('g', p), TX('us', p), 'Sup. ha', 'V m³/ha', 'V tot m³'], rows: Object.entries(g).map(([k, c]) => [k, String(c.n), f2(c.sup), c.sup ? f0(c.V / c.sup) : '', f0(c.V)]), caption: `Tabella 2.2 – Riepilogo per ${TX('gn', p)}.`});
+  }
+  if (rows.length > 1) {
+    const lab = rows.map(({x}) => TX('ua', p) + ' ' + x.num + (x.sub || ''));
+    B.push({t: 'img', ...chartErrBars(rows.map(({x, s}) => ({name: TX('ua', p) + ' ' + x.num + (x.sub || ''), value: s.V, err: s.E ? s.V * s.E / 100 : 0})), {title: 'Volume a ettaro (m³/ha) con intervallo di confidenza al 95%', xLabel: 'm³/ha'}), width: 160, caption: 'Figura 2.1 – Provvigione a ettaro per ' + TX('un', p) + '; la barra indica l\'errore di campionamento.'});
+    B.push({t: 'img', ...chartBars(lab, [{name: 'N/ha', values: rows.map(q => q.s.N)}, {name: 'G m²/ha ×10', values: rows.map(q => q.s.G * 10)}], {title: 'Densità e area basimetrica', values: rows.length <= 12, h: 320}), width: 160, caption: 'Figura 2.2 – Numero di piante a ettaro e area basimetrica (×10) per ' + TX('un', p) + '.'});
+    const spTot = {}; rows.forEach(({x, s}) => { for (const sp in s.bySp) spTot[sp] = (spTot[sp] || 0) + s.bySp[sp].V * supPart(x); });
+    if (Object.keys(spTot).length > 1) B.push({t: 'img', ...chartPie(Object.entries(spTot).map(([sp, v]) => ({name: spNome(sp), value: v})), {title: 'Composizione della provvigione totale (m³)', unit: 'm³', dec: 0, w: 520, h: 280}), width: 130, caption: 'Figura 2.3 – Ripartizione della provvigione complessiva per specie.'});
+  }
+  B.push({t: 'h', lvl: 1, text: `3. Dettaglio per ${TX('un', p)}`, pageBreak: true});
+  rows.forEach((q, i) => B.push(...adsBlocksPart(p, q.x, q.s, cur, {pageBreak: i > 0})));
+  return B;
+}
+
+async function adsReport(kind, partIds) {
+  const p = prog(); if (!p) return; toast('Preparo il report…', 2500);
+  try {
+    const B = await adsReportBlocks(p.id, partIds);
+    if (B.length < 4) { toast('Nessun rilievo registrato.', 3000); return; }
+    const meta = {title: 'Aree di saggio – ' + (p.nome || ''), footer: `${p.nome || 'PAF'} – Rilievi dendrometrici`, creator: 'PAF Campo'};
+    const blob = kind === 'pdf' ? await DG.pdf(B, meta) : await DG.docx(B, meta);
+    await out(`Aree_di_saggio_${(p.nome || 'PAF').replace(/[^\w]+/g, '_')}.${kind}`, blob, DG_MIME[kind], false);
+  } catch (e) { console.error(e); toast('Errore nel report: ' + e.message, 4000); }
+}
+
+/* ============================================================
+   Scheda particellare completa (Word e PDF): descrizione per sezioni, risultati dendrometrici
+   con tabelle e grafici, documentazione fotografica ordinata per data con didascalie.
+   Fascicolo con tutte le schede del piano oppure scheda singola.
+   ============================================================ */
+const imgSize = url => new Promise(res => { const i = new Image(); i.onload = () => res({w: i.width, h: i.height}); i.onerror = () => res({w: 4, h: 3}); i.src = url; });
+const schVal = (x, f) => { const v = x[f[0]]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) return ''; if (Array.isArray(v)) return v.join(', '); if (f[2] === 'n') { const d = /lat|lon/.test(f[0]) ? 5 : /^sup_/.test(f[0]) ? 2 : 0; const n = num(v); return n === '' ? String(v) : Number(n).toLocaleString('it-IT', {useGrouping: false, minimumFractionDigits: d, maximumFractionDigits: d}); } return String(v); };
+
+async function schedaBlocksPart(p, x, cur, opt = {}) {
+  const B = []; const sch = p.regione && REGIONI[p.regione] ? REGIONI[p.regione].scheda : scheda();
+  B.push({t: 'h', lvl: 1, text: `Scheda ${TX('un', p) === 'particella' ? 'particellare' : 'descrittiva'} – ${unitName(x, p)}`, pageBreak: !!opt.pageBreak});
+  if (x.localita || x.catasto) B.push({t: 'p', i: true, text: [x.localita ? 'Località ' + x.localita : '', x.catasto ? 'Catasto: ' + x.catasto : ''].filter(Boolean).join(' · ')});
+  for (const sec of sch) {
+    const long = sec.f.filter(f => f[2] === 'a' && schVal(x, f)); const short = sec.f.filter(f => f[2] !== 'a' && !['num', 'sub', 'localita', 'catasto'].includes(f[0]) && schVal(x, f));
+    if (!long.length && !short.length) continue;
+    B.push({t: 'h', lvl: 3, text: sec.sec});
+    if (short.length) B.push({t: 'kv', cols: 4, rows: short.map(f => [f[1].replace(/ \(.*\)$/, m => m), schVal(x, f) + (/\(ha\)/.test(f[1]) ? '' : '')])});
+    long.forEach(f => { B.push({t: 'p', b: true, small: true, text: f[1]}); B.push({t: 'p', text: schVal(x, f)}); });
+  }
+  // osservazioni degli operatori (se più di una)
+  const obs = ossOf(x.id).filter(o => Object.keys(ossData(o)).length);
+  if (obs.length > 1) B.push({t: 'p', small: true, i: true, text: `Descrizione ottenuta dalla sintesi di ${obs.length} osservazioni (${[...new Set(obs.map(o => o.op).filter(Boolean))].join(', ')}).`});
+  // dendrometria
+  const s = partStats(x, cur);
+  B.push({t: 'h', lvl: 3, text: 'Rilievi dendrometrici'});
+  if (s) {
+    B.push({t: 'kv', cols: 4, rows: [['Rilievi', `${s.n} ${s.tipo === 'totale' ? 'cavallettamento totale' : 'unità di campionamento'}`], ['Piante misurate', String(s.trees)], ['N/ha', fmt(s.N, 0)], ['G m²/ha', fmt(s.G, 1)], ['V m³/ha', fmt(s.V, 0)], ['dg cm', fmt(s.dg, 1)], ['Provvigione totale', fmt(s.Vtot, 0) + ' m³'], ['Errore di stima', s.E ? fmt(s.E, 1) + ' %' : '–'], ['Ripresa prevista', s.ripresa !== '' ? fmt(s.ripresa, 0) + ' m³' : '–'], ['Biomassa epigea', s.B ? fmt(s.B, 1) + ' t/ha' : '–']]});
+    B.push(...adsBlocksPart(p, x, s, cur, {noHead: true, piedilista: false}));
+  } else B.push({t: 'p', i: true, small: true, text: 'Nessun rilievo dendrometrico registrato.'});
+  // foto
+  const fs = (await fotoOfPart(x)).filter(f => f.data);
+  if (fs.length) {
+    B.push({t: 'h', lvl: 3, text: `Documentazione fotografica (${fs.length} foto)`});
+    const items = [];
+    for (const [i, f] of fs.entries()) { const sz = await imgSize(f.data); items.push({url: f.data, w: sz.w, h: sz.h, cap: `Foto ${i + 1} – ${fotoDate(f)}${f.op ? ' – ' + f.op : ''}${f.cap ? ' – ' + f.cap : ''}${f.lat ? ` (lat ${Number(f.lat).toFixed(5)}, lon ${Number(f.lon).toFixed(5)})` : ''}`}); }
+    B.push({t: 'photos', items, cols: 2});
+  }
+  return B;
+}
+
+async function schedeBlocks(progId, partIds) {
+  const p = S.progetti.find(x => x.id === progId); const cur = curves(progId);
+  let ps = partsOf(progId); if (partIds && partIds.length) ps = ps.filter(x => partIds.includes(x.id));
+  const B = [];
+  if (ps.length > 1) {
+    B.push({t: 'title', lines: [{text: 'PIANO DI ASSESTAMENTO FORESTALE', b: true, size: 18}, {text: p.nome || '', b: true, size: 15, after: 300}, {text: p.proprieta || '', size: 12}, {text: `Comune di ${p.comuni || ''} – Regione ${p.regione || ''}`, size: 11, after: 500}, {text: `SCHEDE ${TX('us', p).toUpperCase()}`, b: true, size: 14}, {text: `${ps.length} schede con descrizione, rilievi dendrometrici e documentazione fotografica`, size: 11, after: 500}, {text: `Il tecnico: ${p.tecnico || ''}`, size: 11}, {text: dIt(Date.now()), size: 10}]});
+    B.push({t: 'h', lvl: 1, text: 'Elenco ' + TX('uns', p)});
+    B.push({t: 'table', small: true, head: [TX('ua', p), TX('g', p) || 'Gruppo', 'Località', 'Sup. tot. ha', 'Sup. bosc. ha', 'Governo', 'Categoria', 'Intervento', 'Rilievi', 'Foto'],
+      rows: await Promise.all(ps.map(async x => [x.num + (x.sub || ''), grpOf(x, p) || '', x.localita || '', fmt(num(x.sup_tot), 2), fmt(num(x.sup_bosc), 2), x.governo || '', x.categoria || '', x.intervento || '', String(rilOf(x.id).filter(r => Object.keys(r.tally || {}).length).length), String((await fotoOfPart(x)).length)]))});
+  }
+  for (const [i, x] of ps.entries()) B.push(...await schedaBlocksPart(p, x, cur, {pageBreak: ps.length > 1 || i > 0}));
+  return B;
+}
+
+async function schedeDoc(kind, partIds) {
+  const p = prog(); if (!p) return; toast('Preparo le schede…', 2500);
+  try {
+    const B = await schedeBlocks(p.id, partIds);
+    const one = partIds && partIds.length === 1 ? S.particelle.find(x => x.id === partIds[0]) : null;
+    const meta = {title: (one ? 'Scheda ' + unitName(one, p) : 'Schede') + ' – ' + (p.nome || ''), footer: `${p.nome || 'PAF'} – ${one ? 'Scheda ' + unitName(one, p) : 'Schede ' + TX('uns', p)}`, creator: 'PAF Campo'};
+    const blob = kind === 'pdf' ? await DG.pdf(B, meta) : await DG.docx(B, meta);
+    const nm = one ? `Scheda_${TX('ua', p).replace(/\W/g, '')}_${String(one.num) + (one.sub || '')}` : `Schede_${(p.nome || 'PAF').replace(/[^\w]+/g, '_')}`;
+    await out(`${nm}.${kind}`, blob, DG_MIME[kind], false);
+  } catch (e) { console.error(e); toast('Errore nelle schede: ' + e.message, 4000); }
 }
 
 /* ============================================================
