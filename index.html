@@ -160,7 +160,7 @@ tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
    PAF Campo — configurazione: specie, schede regionali, norme
    Tutto modificabile: le schede sono dati, non codice.
    ============================================================ */
-const APP_VER = '0.4.1';
+const APP_VER = '0.5.0';
 
 /* Equazioni INFC 2005 (Tabacchi et al., 2011) – coefficienti dal pacchetto R ForIT (CRAN).
    Volume fusto e rami grossi v [dm³] = b1 + b2·d²·h (+ b3·d); fitomassa epigea dw4 [kg] con la stessa forma.
@@ -500,12 +500,12 @@ const LS = {
 };
 
 /* ---------------- IndexedDB ---------------- */
-const STORES = ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'config', 'layers', 'osservazioni'];
+const STORES = ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'config', 'layers', 'osservazioni', 'incarichi'];
 const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('paf-campo', 3);
+      const r = indexedDB.open('paf-campo', 4);
       r.onupgradeneeded = () => { const d = r.result; STORES.forEach(s => { if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, {keyPath: 'id'}); }); };
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -524,7 +524,7 @@ const DB = {
 };
 
 /* ---------------- Stato ---------------- */
-let S = {progetti: [], particelle: [], rilievi: [], altezze: [], specie: [], layers: [], osservazioni: []};
+let S = {progetti: [], particelle: [], rilievi: [], altezze: [], specie: [], layers: [], osservazioni: [], incarichi: []};
 let SP = {};
 const sel = {prog: null, part: null, ril: null, view: 'piano', pmode: 'list', sp: null, st: 'V', hsp: null, rpart: null, allsp: false, smode: 'mia', opf: ''};
 const persistSel = () => LS.set('paf-sel', {prog: sel.prog, part: sel.part, view: sel.view, sp: sel.sp, hsp: sel.hsp});
@@ -545,7 +545,7 @@ async function save(store, obj) {
   const arr = S[store]; const i = arr.findIndex(x => x.id === obj.id);
   if (i < 0) arr.push(obj); else arr[i] = obj;
   await DB.put(store, obj);
-  if (!IMPORTING) { LS.set('paf-lastmod', Date.now()); if (typeof autoMark === 'function') autoMark(); if (store === 'osservazioni') ossAfter(obj); }
+  if (!IMPORTING) { LS.set('paf-lastmod', Date.now()); if (typeof autoMark === 'function') autoMark(); if (store === 'osservazioni') ossAfter(obj); if (store !== 'incarichi' && typeof incTouch === 'function') incTouch(store, obj); }
 }
 /* scrittura senza cambiare la data di modifica (unione dei dati dal cloud) */
 async function putS(store, obj) { const arr = S[store]; const i = arr.findIndex(x => x.id === obj.id); if (i < 0) arr.push(obj); else arr[i] = obj; await DB.put(store, obj); }
@@ -715,7 +715,7 @@ VIEWS.piano = () => {
     const np = S.particelle.filter(q => q.progId === x.id).length;
     h += `<div class="it ${x.id === sel.prog ? 'on' : ''}" onclick="A.selProg('${x.id}')"><div class="b"><b>${esc(x.nome || 'Piano senza nome')}</b><span class="muted">${esc(x.proprieta || '')} · ${np} ${TX('uns', x)}</span></div><span class="pill">${esc(x.regione)}</span></div>`;
   });
-  h += `</div><button class="btn block" onclick="A.newProg()">+ Nuovo piano</button>${NATIVE ? `<button class="btn sec block" style="margin-top:8px" onclick="go('altro');setTimeout(()=>QFC.token()&&A.qfcList(),50)">☁ Scarica un piano da QFieldCloud</button>` : ''}</div>`;
+  h += `</div><button class="btn block" onclick="A.newProg()">+ Nuovo piano</button>${NET() ? `<button class="btn sec block" style="margin-top:8px" onclick="go('altro');setTimeout(()=>QFC.token()&&A.qfcList(),50)">☁ Scarica un piano da QFieldCloud</button>` : ''}</div>`;
   if (p) {
     const ps = partsOf(p.id); const sup = ps.reduce((s, x) => s + (num(x.sup_tot) || 0), 0);
     const nr = S.rilievi.filter(r => r.progId === p.id).length; const nh = S.altezze.filter(r => r.progId === p.id).length;
@@ -773,7 +773,7 @@ function schedaView() {
   const sint = sel.smode === 'sint'; const obs = sint ? null : (sel.ossObj = myObs(pa, ''));
   const info = sint ? synth(ossOf(pa.id), ossFields(scheda())).info : {};
   const rf = f => isOss(f[0]) ? (sint ? renderField(pa, f) + ossHint(pa, f, info) : renderField(obs, f, 'osservazioni')) : renderField(pa, f);
-  h += ossBar(pa);
+  h += incBar('part', pa) + ossBar(pa);
   scheda().forEach((sec, i) => {
     h += `<details class="sec" ${i === 0 || i === 5 || (sint && OSS_SEC.includes(sec.sec)) ? 'open' : ''}><summary>${esc(sec.sec)}${OSS_SEC.includes(sec.sec) ? ` <span class="pill" style="font-weight:400">${sint ? 'sintesi' : 'mia oss.'}</span>` : ''}</summary><div class="in">`;
     const nums = sec.f.filter(f => f[2] === 'n'); const others = sec.f.filter(f => f[2] !== 'n');
@@ -820,7 +820,7 @@ VIEWS.rilievo = () => {
   if (pa) {
     const all = rilOf(pa.id); const ops = [...new Set(S.rilievi.filter(r => r.progId === p.id && r.op).map(r => r.op))];
     const rs = sel.opf ? all.filter(r => r.op === sel.opf) : all;
-    h += `<div class="card"><h2>Rilievi – ${esc(unitName(pa))}</h2>`;
+    h += `<div class="card"><h2>Rilievi – ${esc(unitName(pa))}</h2>${incBar('part', pa)}`;
     if (ops.length > 1) h += `<div class="chips" style="margin-bottom:8px"><button class="chip ${!sel.opf ? 'on' : ''}" onclick="A.opFilter('')">Tutti</button>${ops.map(o => `<button class="chip ${sel.opf === o ? 'on' : ''}" onclick="A.opFilter(this.dataset.o)" data-o="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
     h += `<div class="list">`;
     if (!rs.length) h += `<p class="muted">Nessun rilievo in ${TX('questa')}.</p>`;
@@ -828,7 +828,7 @@ VIEWS.rilievo = () => {
       const n = Object.values(r.tally || {}).reduce((a, b) => a + b, 0);
       const par = r.tipo === 'ads' ? `r ${fmt(num(r.raggio), 2)} m` : r.tipo === 'rel' ? `BAF ${fmt(num(r.baf), 0)}` : `${fmt(num(r.sup) || num(pa.sup_bosc) || num(pa.sup_tot), 2)} ha`;
       const dur = r.t1 && r.t0 ? ` · ${Math.round((r.t1 - r.t0) / 60000)} min` : '';
-      h += `<div class="it" onclick="A.openRil('${r.id}')"><div class="b"><b>${esc(rilName(r))}</b><span class="muted">${par}${r.op ? ' · ' + esc(r.op) : ''} · ${n ? new Date(r.t0).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : 'pianificata'}${dur}${r.lat ? ' · ⌖' : ''}</span></div>${n ? `<span class="pill">${n} piante</span>` : `<span class="pill w">da rilevare</span>`}${r.lat != null && !n ? `<button class="btn sm sec" onclick="event.stopPropagation();sel.part='${pa.id}';go('mappa');setTimeout(()=>MA.navTo('${r.id}'),400)">➜</button>` : ''}</div>`;
+      h += `<div class="it" onclick="A.openRil('${r.id}')"><div class="b"><b>${esc(rilName(r))}${incTag('ads', r)}</b><span class="muted">${par}${r.op ? ' · ' + esc(r.op) : ''} · ${n ? new Date(r.t0).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : 'pianificata'}${dur}${r.lat ? ' · ⌖' : ''}</span></div>${n ? `<span class="pill">${n} piante</span>` : `<span class="pill w">da rilevare</span>`}${r.lat != null && !n ? `<button class="btn sm sec" onclick="event.stopPropagation();sel.part='${pa.id}';go('mappa');setTimeout(()=>MA.navTo('${r.id}'),400)">➜</button>` : ''}</div>`;
     });
     h += `</div><div class="g3"><button class="btn" onclick="A.newRil('ads')">+ ADS</button><button class="btn sec" onclick="A.newRil('rel')">+ Relasc.</button><button class="btn sec" onclick="A.newRil('totale')">+ Totale</button></div></div>`;
   }
@@ -858,7 +858,7 @@ function tallyView() {
     <div class="row" style="margin-bottom:8px"><button class="btn sec sm" onclick="A.closeRil()">← Rilievi</button>
       <div class="grow"><b>${esc(rilName(r))}</b> <span class="muted">${pa ? esc(unitName(pa)) : ''}</span></div>
       <span class="bigN" id="totN">${tot}</span><button class="btn sec sm" onclick="A.undo()" aria-label="Annulla ultimo">↶</button></div>
-    <div class="stati">${Object.entries(STATI).map(([k, v]) => `<button data-s="${k}" class="${sel.st === k ? 'on' : ''}" onclick="A.setSt('${k}')">${v}</button>`).join('')}</div>
+    ${incBar('ads', r)}<div class="stati">${Object.entries(STATI).map(([k, v]) => `<button data-s="${k}" class="${sel.st === k ? 'on' : ''}" onclick="A.setSt('${k}')">${v}</button>`).join('')}</div>
     <div class="spbar">${shown.map(id => `<button class="${id === sel.sp ? 'on' : ''}" onclick="A.setSp('${id}')">${esc(id)}<small>${esc(SP[id].nome.slice(0, 10))}</small></button>`).join('')}
       <button onclick="A.allSp()">${sel.allsp ? '−' : '+'}<small>${sel.allsp ? 'meno' : 'tutte'}</small></button></div>
   </div>
@@ -1037,8 +1037,7 @@ VIEWS.altro = () => {
     const logged = !!QFC.token(); const pp = p || {};
     h += `<div class="card"><h2>QFieldCloud · squadra</h2>
       <label class="f"><span>Nome operatore (compare su rilievi, altezze e osservazioni)</span><input value="${esc(LS.get('paf-op', ''))}" placeholder="${esc(opName())}" onchange="A.opSet(this.value)"></label>
-      ${!NATIVE ? `<p class="muted">La sincronizzazione automatica con QFieldCloud funziona nell'<b>app Android</b> (dal sito web il server non accetta collegamenti). Installala una volta: i dati restano sul telefono e si allineano da soli con QField quando c'è campo.</p>
-        <a class="btn block" href="${APK_URL}">Scarica l'app Android (APK)</a>`
+      ${ponteBox()}${!NET() ? ''
       : logged ? `<p>Collegato come <b>${esc(QFC.user())}</b> <button class="btn sm sec" onclick="A.qfcOut()">Esci</button></p>
         ${p ? `<p class="muted">Progetto collegato: <b id="qfcname">${p.qfc_pid ? esc(p.qfc_name || p.qfc_pid) : 'nessuno'}</b>${p.qfc_last ? ' · ultima sincronizzazione ' + new Date(p.qfc_last).toLocaleString('it-IT') : ''}</p>` : `<p class="muted"><b>Nuovo in squadra?</b> Scegli qui sotto il progetto del piano: il telefono scarica particelle, aree di saggio, altezze e descrizioni dal cloud e da quel momento resta allineato.</p>`}
         ${pp.qfc_err ? `<p class="muted" style="color:#b45309">Ultimo tentativo non riuscito: ${esc(pp.qfc_err)}</p>` : ''}
@@ -1051,6 +1050,7 @@ VIEWS.altro = () => {
         <button class="btn block" onclick="A.qfcIn()">Accedi a QFieldCloud</button>`}
       <pre id="qfclog" class="muted" style="white-space:pre-wrap;font-size:.8rem;margin:8px 0 0"></pre></div>`;
   }
+  h += squadraCard();
   h += `<div class="card"><h2>Aspetto</h2><div class="chips">${[['auto', 'Automatico'], ['light', 'Chiaro'], ['dark', 'Scuro'], ['sun', 'Pieno sole']].map(([k, v]) => `<button class="chip ${LS.get('paf-theme', 'auto') === k ? 'on' : ''}" onclick="A.theme('${k}')">${v}</button>`).join('')}</div></div>`;
   h += `<details class="sec"><summary>Specie e tavole di cubatura</summary><div class="in"><p class="muted">Volume con le equazioni INFC 2005 (Tabacchi et al., 2011): v = b1 + b2·d²·h (+ b3·d). Se inserisci b1 e b2 locali, sostituiscono la tavola INFC. Senza tavola si usa G·h·f.</p><div class="tw"><table><tr><th>Cod</th><th>Nome</th><th>C/L</th><th>Tavola INFC</th><th>f</th><th>b1</th><th>b2</th><th>b3</th></tr>`;
   const inp = (i, k, v, w) => `<input value="${esc(v ?? '')}" inputmode="decimal" style="min-height:36px;padding:6px;width:${w}px" onchange="A.spSet(${i},'${k}',this.value)">`;
@@ -1114,7 +1114,7 @@ const A = {
     const cc = $('#newcc'); if (cc && cc.value.trim()) pa[TX('gk')] = cc.value.trim();
     await save('particelle', pa); sel.part = pa.id; sel.pmode = 'edit'; persistSel(); go('particelle');
   },
-  openPart(id) { sel.part = id; sel.pmode = 'edit'; persistSel(); go('particelle'); },
+  openPart(id) { const x = S.particelle.find(q => q.id === id); if (x && !incOk('part', x)) return; sel.part = id; sel.pmode = 'edit'; persistSel(); go('particelle'); },
   pList() { sel.pmode = 'list'; go('particelle'); },
   selPart(id) { sel.part = id; sel.ril = null; persistSel(); go('rilievo'); },
   toRilievo(id) { sel.part = id; sel.ril = null; persistSel(); go('rilievo'); },
@@ -1152,14 +1152,14 @@ const A = {
     setTimeout(() => { const t = document.querySelector('textarea[data-k=descr]'); if (t) t.scrollIntoView({block: 'center'}); }, 50);
   },
   async newRil(tipo) {
-    const p = prog(); const pa = part();
+    const p = prog(); const pa = part(); if (!incOk('part', pa)) return;
     const n = rilOf(pa.id).filter(r => r.tipo === tipo).length + 1;
     const r = {id: uid(), progId: p.id, partId: pa.id, tipo, n, raggio: '', baf: tipo === 'rel' ? p.baf || 2 : '', tally: {}, undo: [], t0: Date.now(), op: opName()};
     if (tipo === 'ads') Object.assign(r, adsParams(p, pa));
     await save('rilievi', r); sel.ril = r.id; go('rilievo');
     A.gps(c => { r.lat = c.latitude; r.lon = c.longitude; r.acc = c.accuracy; save('rilievi', r); });
   },
-  openRil(id) { sel.ril = id; go('rilievo'); },
+  openRil(id) { const r = S.rilievi.find(q => q.id === id); if (r && !incOk('ads', r)) return; sel.ril = id; go('rilievo'); },
   closeRil() { sel.ril = null; go('rilievo'); },
   endRil() { const r = ril(); r.t1 = Date.now(); save('rilievi', r); toast('Rilievo chiuso'); A.closeRil(); },
   async delRil() {
@@ -1230,7 +1230,7 @@ const A = {
   },
   async backup(share) {
     const data = {app: 'PAF Campo', ver: APP_VER, data: new Date().toISOString(), specie: S.specie};
-    for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'layers', 'osservazioni']) data[s] = await DB.all(s);
+    for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'layers', 'osservazioni', 'incarichi']) data[s] = await DB.all(s);
     const name = `PAF_backup_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
     const ok = await out(name, JSON.stringify(data), 'application/json', share);
     if (ok) { LS.set('paf-lastbackup', Date.now()); go('altro'); }
@@ -1241,7 +1241,7 @@ const A = {
       try {
         const d = JSON.parse(rd.result); if (d.app !== 'PAF Campo') throw new Error('file non valido');
         if (!confirm(`Importare il backup del ${new Date(d.data).toLocaleString('it-IT')}? I dati con lo stesso identificativo verranno sostituiti, gli altri mantenuti.`)) return;
-        for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'layers', 'osservazioni']) for (const x of d[s] || []) await DB.put(s, x);
+        for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'foto', 'layers', 'osservazioni', 'incarichi']) for (const x of d[s] || []) await DB.put(s, x);
         if (d.specie) { S.specie = d.specie; await DB.put('config', {id: 'specie', list: S.specie}); }
         await loadAll(); toast('Backup importato'); go('piano');
       } catch (e) { toast('Errore: ' + e.message, 3500); }
@@ -1483,7 +1483,7 @@ function applyTheme(k) {
   else if (k === 'light') delete r.dataset.theme; else r.dataset.theme = k;
 }
 async function loadAll() {
-  for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'layers', 'osservazioni']) S[s] = await DB.all(s);
+  for (const s of ['progetti', 'particelle', 'rilievi', 'altezze', 'layers', 'osservazioni', 'incarichi']) S[s] = await DB.all(s);
   const cfg = await DB.get('config', 'specie');
   S.specie = cfg ? cfg.list : SPECIE_DEFAULT.map(x => ({...x}));
   // migrazione v0.1 → v0.2: aggiunge tavole INFC e nuove specie
@@ -1847,7 +1847,8 @@ function gpkgSchema(sch) {
     altezze: {geom: null, cols: [['uuid', 'TEXT'], ['mod_ts', 'INTEGER'], ['part_uuid', 'TEXT'], ['ads_uuid', 'TEXT'], ['specie', 'TEXT'], ['d', 'REAL'], ['h', 'REAL'], ['data', 'TEXT'], ['operatore', 'TEXT']]},
     osservazioni: {geom: null, cols: [['uuid', 'TEXT'], ['mod_ts', 'INTEGER'], ['part_uuid', 'TEXT'], ['ads_uuid', 'TEXT'], ['operatore', 'TEXT'], ['dispositivo', 'TEXT'], ['data', 'TEXT'], ['dati', 'TEXT']]},
     specie: {geom: null, cols: [['codice', 'TEXT'], ['nome', 'TEXT'], ['tipo', 'TEXT']]},
-    opzioni: {geom: null, cols: [['campo', 'TEXT'], ['valore', 'TEXT'], ['ordine', 'INTEGER']]}
+    opzioni: {geom: null, cols: [['campo', 'TEXT'], ['valore', 'TEXT'], ['ordine', 'INTEGER']]},
+    incarichi: {geom: null, cols: INC_COLS}
   };
 }
 
@@ -1938,6 +1939,7 @@ async function exportGpkg(progId) {
   }
   const os = S.osservazioni.filter(o => o.progId === progId && Object.keys(ossData(o)).length);
   os.forEach((o, i) => insertRow(db, 'osservazioni', schema.osservazioni, {fid: i + 1, uuid: o.id, mod_ts: o.mod || o.t, part_uuid: o.partId, ads_uuid: o.rilId || null, operatore: o.op || null, dispositivo: o.dev || null, data: new Date(o.t || o.mod).toISOString(), dati: JSON.stringify(ossData(o))}));
+  incRows(progId).forEach(r => insertRow(db, 'incarichi', schema.incarichi, r));
   S.specie.forEach((s, i) => insertRow(db, 'specie', schema.specie, {fid: i + 1, codice: s.id, nome: s.nome, tipo: s.tipo}));
   let of = 0; sch.forEach(s => s.f.forEach(([k, , t, opts]) => { if (opts) opts.forEach((v, i) => insertRow(db, 'opzioni', schema.opzioni, {fid: ++of, campo: k, valore: v, ordine: i + 1})); }));
   insertRow(db, 'opzioni', schema.opzioni, {fid: ++of, campo: 'tipo_ads', valore: 'ads', ordine: 1});
@@ -2152,6 +2154,8 @@ async function importGpkg_(u8, intoProgId, opt = {}) {
     const B = hRemote(b); if (H_F.every(([k, t]) => nv(x[k] ?? '', t) === nv(B[k], t))) { await dropS('altezze', id); rep.del++; rep.chg++; }
   }
 
+  // divisione del lavoro
+  if (tableCols(db, 'incarichi').length) { const ir = await incMerge(rows(db, 'incarichi'), p.id); rep.inc = ir.chg; rep.chg += ir.chg; }
   // sintesi delle descrizioni ricalcolata
   for (const pa of S.particelle.filter(x => x.progId === p.id && (touched.has(x.id) || ossOf(x.id).length || (x.synk || []).length))) if (await ossApply(pa)) rep.synth++;
   try { rep.layers = await readRifLayers(db, p); } catch (e) { console.warn('layer extra', e); rep.layers = 0; }
@@ -2330,7 +2334,8 @@ function drawLayers(fit) {
   const p = prog(); M.lyrP.clearLayers(); M.lyrA.clearLayers();
   partsOf(p.id).forEach(pa => {
     if (!pa.geom) return;
-    const gj = L.geoJSON(pa.geom, {style: {color: pa.id === sel.part ? '#ffd23f' : colorOf(grpOf(pa)), weight: pa.id === sel.part ? 4 : 2, fillOpacity: .12}});
+    const ic = incColor('part', pa);
+    const gj = L.geoJSON(pa.geom, {style: {color: pa.id === sel.part ? '#ffd23f' : ic ? ic.col : colorOf(grpOf(pa)), weight: pa.id === sel.part ? 4 : ic ? 3 : 2, fillColor: ic ? ic.col : undefined, fillOpacity: ic ? (ic.done ? .04 : .18) : .12, dashArray: ic && ic.done ? '2 6' : null}});
     gj.on('click', ev => { L.DomEvent.stopPropagation(ev); if (M.draw) return M.map.fire('click', ev); partPopup(pa, ev.latlng); });
     gj.addTo(M.lyrP);
     const c = GEO.centroid(pa.geom);
@@ -2338,7 +2343,8 @@ function drawLayers(fit) {
   });
   S.rilievi.filter(r => r.progId === p.id && r.lat != null).forEach(r => {
     const done = Object.keys(r.tally || {}).length > 0;
-    const m = L.circleMarker([r.lat, r.lon], {radius: 8, color: '#fff', weight: 2, fillColor: done ? '#2f6b2a' : '#d97706', fillOpacity: done ? 1 : .9});
+    const ia = incColor('ads', r);
+    const m = L.circleMarker([r.lat, r.lon], {radius: 8, color: ia ? ia.col : '#fff', weight: ia ? 3 : 2, fillColor: done ? '#2f6b2a' : '#d97706', fillOpacity: done ? 1 : .9});
     m.on('click', ev => { L.DomEvent.stopPropagation(ev); adsPopup(r, ev.latlng); });
     m.bindTooltip(String(r.n), {permanent: true, direction: 'center', className: 'adslabel'});
     m.addTo(M.lyrA);
@@ -2365,7 +2371,7 @@ function mapTools() {
 }
 function partPopup(pa, ll) {
   const st = partStats(pa);
-  L.popup().setLatLng(ll).setContent(`<b>${esc(unitName(pa))}</b><br>${esc(pa.tipologia || pa.compresa || '')}<br>${fmt(GEO.areaHa(pa.geom), 2)} ha cartografici${st ? `<br>${fmt(st.V, 0)} m³/ha · ${st.n} ril.` : ''}<br>
+  L.popup().setLatLng(ll).setContent(`<b>${esc(unitName(pa))}</b><br>${esc(pa.tipologia || pa.compresa || '')}<br>${fmt(GEO.areaHa(pa.geom), 2)} ha cartografici${st ? `<br>${fmt(st.V, 0)} m³/ha · ${st.n} ril.` : ''}${(c => c ? `<br><span style="color:${c.col}">●</span> ${esc(c.op)}${c.done ? ' ✓ completata' : ''}` : '')(incColor('part', pa))}<br>
     <button class="btn sm" onclick="MA.goPart('${pa.id}','particelle')">Scheda</button> <button class="btn sm sec" onclick="MA.goPart('${pa.id}','rilievo')">Rilievi</button>`).openOn(M.map);
 }
 function adsPopup(r, ll) {
@@ -2468,7 +2474,7 @@ const MA = {
     MA.navTo(todo[0].id);
   },
   openAds(id) { const r = S.rilievi.find(x => x.id === id); sel.part = r.partId; sel.ril = id; if (r.planned && M.pos) { r.plon = r.lon; r.plat = r.lat; r.lon = M.pos[0]; r.lat = M.pos[1]; r.acc = M.posAcc; } r.planned = false; r.t0 = Date.now(); save('rilievi', r); M.target = null; persistSel(); go('rilievo'); },
-  goPart(id, v) { sel.part = id; sel.pmode = 'edit'; sel.ril = null; persistSel(); go(v); }
+  goPart(id, v) { const x = S.particelle.find(q => q.id === id); if (v === 'particelle' && x && !incOk('part', x)) return; sel.part = id; sel.pmode = 'edit'; sel.ril = null; persistSel(); go(v); }
 };
 
 /* immagine della carta particellare per la relazione (senza sfondo) */
@@ -2878,10 +2884,14 @@ Object.assign(MA, {
    ============================================================ */
 const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
 const b64ToU8 = s => Uint8Array.from(atob(String(s).replace(/\s+/g, '')), c => c.charCodeAt(0));
+/* Sito web: le chiamate passano dal "ponte" (Cloudflare Worker dell'utente) perché QFieldCloud non accetta il browser.
+   L'indirizzo del ponte è comune alle due app (stesso sito). */
+const ponte = () => String(LS.get('qfc-ponte', '') || '').trim().replace(/\/+$/, '');
+const NET = () => NATIVE || !!ponte();
 function u8ToB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
 
 const QFC = {
-  url: () => (LS.get('qfc-url', 'https://app.qfield.cloud').replace(/\/+$/, '')) + '/api/v1/',
+  url: () => (!NATIVE && ponte() ? ponte() : LS.get('qfc-url', 'https://app.qfield.cloud').replace(/\/+$/, '')) + '/api/v1/',
   token: () => LS.get('qfc-token', ''),
   user: () => LS.get('qfc-user', ''),
   /* body: oggetto JSON oppure {file: Uint8Array, name, mime} per il caricamento multipart */
@@ -2917,7 +2927,7 @@ const QFC = {
       else if (body) { h['Content-Type'] = 'application/json'; b = JSON.stringify(body); }
       let r;
       try { r = await fetch(url, {method, headers: h, body: b}); }
-      catch (e) { throw new Error('QFieldCloud non raggiungibile da un sito web: la sincronizzazione diretta funziona nell\'app Android.'); }
+      catch (e) { throw new Error(ponte() ? 'Ponte o QFieldCloud non raggiungibili (' + (e.message || 'rete assente') + '). Controlla la connessione e l\'indirizzo del ponte.' : 'Dal sito web serve il ponte verso QFieldCloud: impostalo in Altro → QFieldCloud (oppure usa l\'app Android).'); }
       status = r.status;
       if (r.ok) { if (bin) return new Uint8Array(await r.arrayBuffer()); return status === 204 ? null : r.json(); }
       text = await r.text();
@@ -3008,10 +3018,10 @@ async function qfcLink(pid, name, log = () => {}) {
 
 /* ---------- Sincronizzazione automatica (solo app Android) ---------- */
 const AUTO = {busy: false, dirty: false, last: 0, timer: null, errAt: 0};
-const autoOn = () => NATIVE && LS.get('qfc-auto', true) && !!QFC.token();
+const autoOn = () => NET() && LS.get('qfc-auto', true) && !!QFC.token();
 function syncBadge(state) {
   const el = document.getElementById('sync'); if (!el) return;
-  el.hidden = !NATIVE || !QFC.token();
+  el.hidden = !NET() || !QFC.token();
   el.textContent = {run: '☁ …', ok: '☁ ✓', err: '☁ !', wait: '☁ •'}[state] || '☁';
   el.title = {run: 'Sincronizzazione in corso', ok: 'Sincronizzato', err: 'Ultima sincronizzazione non riuscita', wait: 'Modifiche da inviare'}[state] || '';
 }
@@ -3034,9 +3044,9 @@ async function autoSync(force) {
   if (sel.view === 'mappa') { if (M.map && M.lyrP) drawLayers(false); }
   else if (['piano', 'particelle', 'altro'].includes(sel.view) && !document.querySelector('input:focus,textarea:focus,select:focus')) go(sel.view);
 }
-function autoMark() { if (!NATIVE) return; AUTO.dirty = true; syncBadge('wait'); clearTimeout(AUTO.timer); AUTO.timer = setTimeout(() => autoSync(), 45e3); }
+function autoMark() { if (!NET()) return; AUTO.dirty = true; syncBadge('wait'); clearTimeout(AUTO.timer); AUTO.timer = setTimeout(() => autoSync(), 45e3); }
 function autoStart() {
-  if (!NATIVE) return;
+  if (!NET() || AUTO.started) return; AUTO.started = true;
   syncBadge(AUTO.dirty ? 'wait' : '');
   addEventListener('online', () => setTimeout(() => autoSync(true), 3000));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoSync(); else if (AUTO.dirty) autoSync(true); });
@@ -3076,6 +3086,192 @@ async function qfcReadOther(pid, list, log = () => {}) {
     }
   }
   return sets;
+}
+
+/* ---------- Ponte per il sito web ---------- */
+function ponteBox() {
+  if (NATIVE) return '';
+  const p = ponte();
+  if (p) return `<p class="muted" style="margin:0 0 6px">Sito web collegato tramite il ponte <b>${esc(p.replace(/^https?:\/\//, ''))}</b> <button class="btn sm sec" onclick="A.ponteSet('')">Cambia</button></p>`;
+  return `<p class="muted">Dal <b>sito web</b> la sincronizzazione passa da un piccolo <b>ponte</b> (Cloudflare, gratuito), perché QFieldCloud non accetta collegamenti diretti dal browser. Incolla qui l'indirizzo del tuo ponte: da quel momento il sito si sincronizza come l'app Android.</p>
+    <label class="f"><span>Indirizzo del ponte</span><input id="ponteu" inputmode="url" placeholder="https://qfc-ponte.tuonome.workers.dev"></label>
+    <div class="g2"><button class="btn" onclick="A.ponteSet(document.getElementById('ponteu').value)">Collega il ponte</button><a class="btn sec" href="${APK_URL}">App Android (APK)</a></div>`;
+}
+Object.assign(A, {
+  async ponteSet(v) {
+    v = String(v || '').trim().replace(/\/+$/, '');
+    if (!v) { LS.set('qfc-ponte', ''); syncBadge(''); return go('altro'); }
+    if (!/^https:\/\/[^\s/]+/.test(v)) return toast('L\'indirizzo deve iniziare con https://', 3500);
+    try { const r = await fetch(v + '/'); const t = await r.text(); if (!/Ponte QFieldCloud/.test(t)) throw new Error('risposta inattesa'); }
+    catch (e) { return toast('Il ponte non risponde: controlla l\'indirizzo (' + e.message + ')', 5000); }
+    LS.set('qfc-ponte', v); toast('Ponte collegato', 1500); autoStart(); syncBadge(''); go('altro');
+  }
+});
+
+/* ============================================================
+   Divisione del lavoro in squadra (comune a PAF Campo e Martellata Campo)
+   Ogni unità di lavoro (particella / area / area di saggio) può essere:
+   assegnata dal capo squadra, presa in carico da un operatore, completata, libera.
+   I record viaggiano nel GeoPackage (tabella "incarichi") con la sincronizzazione.
+   Regole di unione: vince la modifica più recente; se due operatori prendono la stessa
+   unità senza rete, la tiene chi l'ha presa per primo; un rilascio vale solo per chi la teneva.
+   ============================================================ */
+const IS_PAF = 'progetti' in S;
+const SQ = IS_PAF ? {
+  proj: () => prog(), projKey: 'progId',
+  kinds: {
+    part: {lab: () => TX('un'), list: pid => partsOf(pid), name: x => unitName(x), parent: null, store: 'particelle'},
+    ads: {lab: () => 'area di saggio', list: pid => S.rilievi.filter(r => r.progId === pid).sort((a, b) => (a.n || 0) - (b.n || 0)), name: r => rilName(r), parent: r => ['part', S.particelle.find(p => p.id === r.partId)], store: 'rilievi'}
+  },
+  top: 'part',
+  touch: (store, o) => store === 'particelle' ? ['part', o] : store === 'rilievi' ? ['ads', o]
+    : store === 'osservazioni' ? (o.rilId ? ['ads', S.rilievi.find(r => r.id === o.rilId)] : ['part', S.particelle.find(p => p.id === o.partId)]) : null,
+  ops: pid => [].concat(S.rilievi.filter(r => r.progId === pid).map(r => r.op), S.osservazioni.filter(o => o.progId === pid).map(o => o.op), S.altezze.filter(h => h.progId === pid).map(h => h.op)),
+  last: (pid, op) => Math.max(0, ...S.rilievi.filter(r => r.progId === pid && r.op === op).map(r => r.mod || r.t1 || r.t0 || 0), ...S.osservazioni.filter(o => o.progId === pid && o.op === op).map(o => o.mod || o.t || 0))
+} : {
+  proj: () => lot(), projKey: 'lottoId',
+  kinds: {
+    area: {lab: () => 'area', list: lid => areeOf(lid).filter(a => a.tipo !== 'Area esclusa'), name: a => a.nome || 'Area', parent: null, store: 'aree'},
+    ads: {lab: () => 'area di saggio', list: lid => adsOf(lid), name: a => 'AS' + (a.n ?? ''), parent: a => ['area', S.aree.find(x => x.id === a.areaId)], store: 'ads'}
+  },
+  top: 'area',
+  touch: (store, o) => store === 'piante' ? (o.areaId ? ['area', S.aree.find(a => a.id === o.areaId)] : null) : store === 'ads' ? ['ads', o]
+    : store === 'adsril' ? ['ads', S.ads.find(a => a.id === o.adsId)] : null,
+  ops: lid => [].concat(S.piante.filter(x => x.lottoId === lid).map(x => x.op), S.ads.filter(x => x.lottoId === lid).map(x => x.op)),
+  last: (lid, op) => Math.max(0, ...S.piante.filter(x => x.lottoId === lid && x.op === op).map(x => x.mod || x.t || 0), ...S.ads.filter(x => x.lottoId === lid && x.op === op).map(x => x.mod || x.t || 0))
+};
+const INC_ST = {assegnato: 'assegnata', corso: 'in corso', fatto: 'completata', libero: 'libera'};
+const incHeld = s => s === 'assegnato' || s === 'corso' || s === 'fatto';
+const OPCOL = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf', '#8c564b', '#e377c2'];
+const opColor = op => { let h = 0; for (const c of String(op || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0; return OPCOL[h % OPCOL.length]; };
+const incOf = id => S.incarichi.find(x => x.id === id);
+const sqCapo = () => !!LS.get('sq-capo', false);
+const sqAuto = () => LS.get('sq-auto', true);
+const sqOn = p => !!(p && (p.qfc_pid || sqCapo() || S.incarichi.some(x => x.projId === p.id && x.stato !== 'libero')));
+/* incarico che vale per l'elemento: il suo, altrimenti quello dell'unità che lo contiene */
+function incEff(kind, el) {
+  if (!el) return null;
+  const r = incOf(el.id); if (r && incHeld(r.stato)) return Object.assign({own: true}, r);
+  const k = SQ.kinds[kind]; if (!k || !k.parent) return null;
+  const [pk, pe] = k.parent(el) || []; if (!pe) return null;
+  const pr = incOf(pe.id); return pr && incHeld(pr.stato) ? Object.assign({own: false, pkind: pk, pel: pe}, pr) : null;
+}
+async function incSet(kind, el, stato, op) {
+  const p = SQ.proj(); const me = opName(); const old = incOf(el.id) || {};
+  const r = {id: el.id, projId: el[SQ.projKey] || (p && p.id), kind, nome: SQ.kinds[kind].name(el), op: stato === 'libero' ? '' : (op || me), stato, da: stato === 'assegnato' ? me : (old.da || ''),
+    tp: stato === 'corso' && old.stato !== 'corso' ? Date.now() : (old.tp || (stato === 'corso' ? Date.now() : 0)), prev: old.op || '', t: Date.now()};
+  if (stato === 'corso' && old.stato === 'assegnato' && old.op === r.op) r.tp = old.tp || Date.now();
+  await save('incarichi', r); return r;
+}
+/* chiamata da save(): prende in carico in automatico ciò su cui si inizia a lavorare */
+const INC_BUSY = new Set();
+function incTouch(store, o) {
+  try {
+    if (!sqAuto() || !o) return; const t = SQ.touch(store, o); if (!t || !t[1]) return;
+    const [kind, el] = t; const p = SQ.proj(); if (!p || !p.qfc_pid || el[SQ.projKey] !== p.id) return;
+    if (INC_BUSY.has(el.id)) return;
+    const h = incEff(kind, el); const me = opName();
+    if (h && !(h.own && h.op === me && h.stato === 'assegnato')) return;
+    const k2 = kind, e2 = el;
+    INC_BUSY.add(e2.id); incSet(k2, e2, 'corso', me).then(() => { if (!h) toast(`Hai preso in carico ${SQ.kinds[k2].name(e2)}`, 1800); }).finally(() => INC_BUSY.delete(e2.id));
+  } catch (e) { console.warn('incTouch', e); }
+}
+/* da chiamare quando si apre un'unità: avvisa se è di un altro operatore (una sola volta per sessione) */
+const INC_OK = new Set();
+function incOk(kind, el) {
+  const h = incEff(kind, el); if (!h || h.op === opName() || INC_OK.has(h.id + h.op + h.stato)) return true;
+  const k = SQ.kinds[h.own ? kind : h.pkind]; const nm = h.own ? SQ.kinds[kind].name(el) : k.name(h.pel);
+  const quando = h.mod ? ' (' + new Date(h.mod).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) + ')' : '';
+  const msg = h.stato === 'fatto' ? `${nm} è già stata completata da ${h.op}${quando}.` : h.stato === 'assegnato' ? `${nm} è assegnata a ${h.op} dal capo squadra.` : `${nm} è in carico a ${h.op}${quando}.`;
+  if (!confirm(msg + '\n\nPer evitare doppioni lavora su un\'altra unità. Vuoi lavorarci comunque?')) return false;
+  INC_OK.add(h.id + h.op + h.stato); return true;
+}
+const cap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
+function sqOps(p) {
+  const set = new Set([opName()].concat(LS.get('sq-ops', []), S.incarichi.filter(x => x.projId === p.id).map(x => x.op), SQ.ops(p.id)).filter(Boolean));
+  return [...set].sort((a, b) => a.localeCompare(b, 'it'));
+}
+/* barra "chi ci lavora" nella scheda dell'unità */
+function incBar(kind, el) {
+  const p = SQ.proj(); if (!el || !sqOn(p)) return '';
+  const h = incEff(kind, el); const me = opName(); const k = SQ.kinds[kind];
+  const dot = op => `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${opColor(op)};margin-right:6px"></span>`;
+  let txt, btn = '';
+  if (!h) { txt = `<b>Libera</b> · nessuno ci sta lavorando`; btn = `<button class="btn sm" onclick="A.incDo('${kind}','${el.id}','corso')">Prendo in carico</button>`; }
+  else if (!h.own) txt = `${dot(h.op)}Fa parte di ${esc(SQ.kinds[h.pkind].name(h.pel))}, ${INC_ST[h.stato]} ${h.op === me ? 'a <b>te</b>' : 'a <b>' + esc(h.op) + '</b>'}`;
+  else if (h.op === me) {
+    txt = `${dot(me)}${h.stato === 'assegnato' ? `Assegnata a <b>te</b>${h.da && h.da !== me ? ' da ' + esc(h.da) : ''}` : h.stato === 'fatto' ? '<b>Completata</b> da te' : 'In carico a <b>te</b>'}`;
+    btn = h.stato === 'fatto' ? `<button class="btn sm sec" onclick="A.incDo('${kind}','${el.id}','corso')">Riapri</button>`
+      : `${h.stato === 'assegnato' ? `<button class="btn sm" onclick="A.incDo('${kind}','${el.id}','corso')">Inizio</button>` : `<button class="btn sm" onclick="A.incDo('${kind}','${el.id}','fatto')">✓ Completata</button>`}<button class="btn sm sec" onclick="A.incDo('${kind}','${el.id}','libero')">Rilascia</button>`;
+  } else txt = `${dot(h.op)}${h.stato === 'fatto' ? 'Completata' : h.stato === 'assegnato' ? 'Assegnata' : 'In carico'} a <b>${esc(h.op)}</b>${h.mod ? ' · ' + new Date(h.mod).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : ''}`;
+  const capo = sqCapo() ? `<select style="width:auto;min-height:34px;padding:4px" onchange="A.incAssign('${kind}','${el.id}',this.value)"><option value="">Assegna a…</option>${sqOps(p).map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}<option value="-">— libera</option></select>` : '';
+  const warn = h && h.op !== me;
+  return `<div class="incbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;margin:0 0 10px;border-radius:10px;border-left:5px solid ${h ? opColor(h.op) : '#9ca3af'};background:${warn ? 'rgba(217,119,6,.12)' : 'rgba(127,127,127,.08)'}"><span style="flex:1;min-width:180px">${txt}</span>${btn}${capo}</div>`;
+}
+/* piccola etichetta con il responsabile, per gli elenchi */
+function incTag(kind, el) { const h = incEff(kind, el); return h && h.own ? ` <span class="pill" style="background:${opColor(h.op)};color:#fff">${esc(h.op)}${h.stato === 'fatto' ? ' ✓' : ''}</span>` : ''; }
+/* colore in mappa (null = nessun incarico) */
+function incColor(kind, el) { const h = incEff(kind, el); return h ? {col: opColor(h.op), done: h.stato === 'fatto', op: h.op} : null; }
+/* scheda "Divisione del lavoro" in Altro */
+function squadraCard() {
+  const p = SQ.proj(); if (!p) return '';
+  const top = SQ.top, K = SQ.kinds[top]; const units = K.list(p.id); const me = opName(); const ops = sqOps(p);
+  const inc = S.incarichi.filter(x => x.projId === p.id && incHeld(x.stato));
+  let h = `<div class="card" id="sqcard"><h2>Divisione del lavoro</h2>
+    <p class="muted">Per non sovrapporsi: ogni ${esc(K.lab())} o area di saggio ha un responsabile. Quando inizi a lavorare su un'unità libera la prendi in carico tu; se apri un'unità di un collega l'app ti avvisa. Tutto viaggia con la sincronizzazione QFieldCloud (app Android e sito web con il ponte).</p>
+    <label class="row" style="gap:8px;margin:6px 0"><input type="checkbox" ${sqAuto() ? 'checked' : ''} onchange="LS.set('sq-auto',this.checked)" style="width:auto;min-height:0"> <span>Prendi in carico automaticamente ciò su cui inizi a lavorare</span></label>
+    <label class="row" style="gap:8px;margin:6px 0"><input type="checkbox" ${sqCapo() ? 'checked' : ''} onchange="LS.set('sq-capo',this.checked);go('altro')" style="width:auto;min-height:0"> <span>Sono il <b>capo squadra</b> (assegno il lavoro agli operatori)</span></label>`;
+  h += `<h3>Squadra</h3><div class="tw"><table><tr><th>Operatore</th><th>Assegnate</th><th>In corso</th><th>Completate</th><th>Ultima attività</th></tr>${ops.map(o => {
+    const mine = inc.filter(x => x.op === o); const last = Math.max(SQ.last(p.id, o), ...mine.map(x => x.mod || 0));
+    return `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${opColor(o)};margin-right:6px"></span>${esc(o)}${o === me ? ' (tu)' : ''}</td><td>${mine.filter(x => x.stato === 'assegnato').length}</td><td>${mine.filter(x => x.stato === 'corso').length}</td><td>${mine.filter(x => x.stato === 'fatto').length}</td><td>${last > 0 ? new Date(last).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : '–'}</td></tr>`;
+  }).join('')}</table></div>`;
+  if (sqCapo()) h += `<div class="row" style="margin-top:6px"><input id="sqnew" placeholder="Nome di un nuovo operatore" class="grow" style="width:auto"><button class="btn sm" onclick="A.sqAddOp()">+ Operatore</button></div>`;
+  const libere = units.filter(u => !incEff(top, u)).length;
+  h += `<h3>${cap(K.lab())} (${units.length}, libere ${libere})</h3>${units.length ? `<div class="tw"><table><tr><th>${cap(K.lab())}</th><th>Responsabile</th><th>Stato</th>${sqCapo() ? '<th>Assegna</th>' : ''}</tr>${units.map(u => {
+    const x = incEff(top, u);
+    return `<tr><td>${esc(K.name(u))}</td><td>${x ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${opColor(x.op)};margin-right:6px"></span>${esc(x.op)}` : '–'}</td><td>${x ? INC_ST[x.stato] : 'libera'}</td>${sqCapo() ? `<td><select style="width:auto;min-height:32px;padding:3px" onchange="A.incAssign('${top}','${u.id}',this.value)"><option value="">${x ? '…' : 'Assegna…'}</option>${ops.map(o => `<option value="${esc(o)}" ${x && x.op === o ? 'disabled' : ''}>${esc(o)}</option>`).join('')}${x ? '<option value="-">— libera</option>' : ''}</select></td>` : ''}</tr>`;
+  }).join('')}</table></div>` : `<p class="muted">Nessuna unità nel ${IS_PAF ? 'piano' : 'lotto'}.</p>`}`;
+  if (!p.qfc_pid) h += `<p class="muted" style="color:#b45309">Il ${IS_PAF ? 'piano' : 'lotto'} non è ancora collegato a QFieldCloud: gli altri operatori vedranno la divisione del lavoro solo dopo il collegamento.</p>`;
+  return h + `</div>`;
+}
+Object.assign(A, {
+  async incDo(kind, id, stato) {
+    const el = S[SQ.kinds[kind].store].find(x => x.id === id); if (!el) return;
+    const h = incEff(kind, el);
+    if (stato === 'corso' && h && h.op !== opName() && !incOk(kind, el)) return;
+    await incSet(kind, el, stato, opName());
+    toast(stato === 'corso' ? 'Presa in carico' : stato === 'fatto' ? 'Segnata come completata' : 'Rilasciata', 1400); go(sel.view);
+  },
+  async incAssign(kind, id, op) {
+    if (!op) return; const el = S[SQ.kinds[kind].store].find(x => x.id === id); if (!el) return;
+    if (op === '-') await incSet(kind, el, 'libero'); else await incSet(kind, el, 'assegnato', op);
+    toast(op === '-' ? 'Liberata' : 'Assegnata a ' + op, 1400); go(sel.view);
+  },
+  sqAddOp() { const v = (document.getElementById('sqnew') || {}).value; if (!v || !v.trim()) return; const a = LS.get('sq-ops', []); if (!a.includes(v.trim())) a.push(v.trim()); LS.set('sq-ops', a); go('altro'); }
+});
+
+/* ---------- scambio con il GeoPackage ---------- */
+const INC_COLS = [['uuid', 'TEXT'], ['mod_ts', 'INTEGER'], ['tipo', 'TEXT'], ['nome', 'TEXT'], ['operatore', 'TEXT'], ['stato', 'TEXT'], ['assegnato_da', 'TEXT'], ['t_presa', 'INTEGER'], ['prec', 'TEXT'], ['data', 'TEXT']];
+function incRows(pid) {
+  return S.incarichi.filter(x => x.projId === pid).map((x, i) => ({fid: i + 1, uuid: x.id, mod_ts: x.mod || x.t || 0, tipo: x.kind, nome: x.nome || null, operatore: x.op || null, stato: x.stato, assegnato_da: x.da || null, t_presa: x.tp || null, prec: x.prev || null, data: new Date(x.mod || x.t || Date.now()).toISOString()}));
+}
+/* unisce gli incarichi del cloud; restituisce quante modifiche e le unità perse da questo operatore */
+async function incMerge(rs, pid) {
+  let chg = 0; const lost = []; const me = opName();
+  for (const r of rs) {
+    if (!r.uuid) continue;
+    const x = {id: r.uuid, projId: pid, kind: r.tipo || '', nome: r.nome || '', op: r.operatore || '', stato: INC_ST[r.stato] ? r.stato : 'libero', da: r.assegnato_da || '', tp: r.t_presa || 0, prev: r.prec || '', mod: r.mod_ts || 0, t: r.mod_ts || 0};
+    const l = incOf(x.id);
+    if (!l) { await putS('incarichi', x); chg++; continue; }
+    if ((l.mod || 0) === x.mod && l.op === x.op && l.stato === x.stato) continue;
+    let win = x.mod > (l.mod || 0) ? x : l;
+    if (x.stato === 'corso' && l.stato === 'corso' && x.op !== l.op) win = (x.tp || x.mod) <= (l.tp || l.mod) ? x : l; // prese in contemporanea: vince la prima
+    const older = win === x ? l : x;
+    if (!['corso', 'assegnato'].includes(win.stato) && win.prev && incHeld(older.stato) && older.op && older.op !== win.prev && older.stato !== 'fatto') win = older; // rilascio di un incarico che nel frattempo era passato ad altri
+    if (win === x) { if (l.op === me && ['corso', 'assegnato'].includes(l.stato) && x.op && x.op !== me) lost.push(x); await putS('incarichi', x); chg++; }
+  }
+  if (lost.length) setTimeout(() => toast(`Attenzione: ${lost.map(x => x.nome).join(', ')} ${lost.length > 1 ? 'erano già state prese' : 'era già stata presa'} da ${[...new Set(lost.map(x => x.op))].join(', ')}`, 6000), 300);
+  return {chg, lost};
 }
 
 /* ============================================================
