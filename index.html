@@ -138,6 +138,8 @@ tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
 .leaflet-container{font:inherit}
 [hidden]{display:none!important}
 .oh{font-size:.78rem;margin:-8px 0 10px;white-space:pre-wrap}
+.chk{display:flex;align-items:center;gap:8px;font-size:.92rem;margin:6px 0}
+.chk input[type=checkbox]{width:18px;height:18px;margin:0;flex:none;accent-color:var(--acc)}
 </style>
 </head>
 <body>
@@ -160,7 +162,7 @@ tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
    PAF Campo — configurazione: specie, schede regionali, norme
    Tutto modificabile: le schede sono dati, non codice.
    ============================================================ */
-const APP_VER = '0.6.0';
+const APP_VER = '0.7.0';
 
 /* Equazioni INFC 2005 (Tabacchi et al., 2011) – coefficienti dal pacchetto R ForIT (CRAN).
    Volume fusto e rami grossi v [dm³] = b1 + b2·d²·h (+ b3·d); fitomassa epigea dw4 [kg] con la stessa forma.
@@ -709,7 +711,7 @@ const VIEWS = {};
 /* ---------- PIANO ---------- */
 VIEWS.piano = () => {
   const p = prog();
-  let h = `<div class="card"><h2>Piani di assestamento</h2><div class="list">`;
+  let h = `<div class="card">${typeof PT !== 'undefined' && PT.on() ? `<button class="chip" style="float:right" onclick="go('portale')">☁ Portale</button>` : ''}<h2>Piani di assestamento</h2><div class="list">`;
   if (!S.progetti.length) h += `<p class="muted">Nessun piano. Creane uno: i dati restano su questo dispositivo e funzionano senza rete.</p>`;
   S.progetti.slice().sort((a, b) => (b.mod || 0) - (a.mod || 0)).forEach(x => {
     const np = S.particelle.filter(q => q.progId === x.id).length;
@@ -1027,6 +1029,7 @@ VIEWS.altro = () => {
     <div class="g2"><button class="btn" onclick="A.adsReport('docx')">Aree di saggio (Word)</button><button class="btn" onclick="A.adsReport('pdf')">Aree di saggio (PDF)</button>
     <button class="btn" onclick="A.schede('docx')">Schede ${esc(TX('us').toLowerCase())} (Word)</button><button class="btn" onclick="A.schede('pdf')">Schede ${esc(TX('us').toLowerCase())} (PDF)</button></div></div>`;
   if (p) {
+    if (typeof PT !== 'undefined') h += PT.card();
     h += `<div class="card"><h2>QGIS · QField · QFieldCloud</h2>
       <p class="muted">Il piano viene scambiato come GeoPackage <b>${GPKG_FILE}</b> (WGS84 / UTM 33N, EPSG:32633) con il progetto QGIS <b>PAF_rilievi.qgz</b>: particelle con scheda completa, aree di saggio, piedilista, altezze.</p>
       <div class="g2"><button class="btn sec" onclick="A.gpkgOut()">Esporta GeoPackage</button><button class="btn sec" onclick="A.qgsOut()">Progetto QGIS (.qgz)</button></div>
@@ -1392,7 +1395,8 @@ const A = {
 window.addEventListener('afterprint', () => document.body.classList.remove('printing'));
 
 async function out(name, content, mime, share) {
-  const blob = new Blob([content], {type: mime});
+  const blob = content instanceof Blob ? content : new Blob([content], {type: mime});
+  if (typeof PT !== 'undefined' && !PT.noArch) setTimeout(() => PT.archivia(name, blob), 300);
   if (NATIVE) {
     try {
       const data = u8ToB64(new Uint8Array(await blob.arrayBuffer())); let uri = null, where = '';
@@ -4081,6 +4085,180 @@ async function relazioneDocx(progId) {
   });
   return D.Packer.toBlob(doc);
 }
+
+/* Portale Foresta — parte specifica di PAF Campo (vedi portale.js) */
+const PT_APP = 'paf', PT_STORE = 'progetti', PT_FOTO_KEY = 'progId', PT_LASTMOD = 'paf-lastmod', portaleMain = 'piano';
+function portaleCentro(pts) { const p = pts.filter(x => x.lat != null && x.lat !== '' && x.lon != null); if (!p.length) return null; return {lat: Math.round(p.reduce((s, x) => s + +x.lat, 0) / p.length * 1e5) / 1e5, lon: Math.round(p.reduce((s, x) => s + +x.lon, 0) / p.length * 1e5) / 1e5}; }
+async function portaleStato(p) {
+  const ps = partsOf(p.id); const rs = S.rilievi.filter(r => r.progId === p.id); const hs = S.altezze.filter(h => h.progId === p.id); const os = S.osservazioni.filter(o => o.progId === p.id);
+  const cur = curves(p.id); let piante = 0, prov = 0; const fatti = rs.filter(r => Object.keys(r.tally || {}).length);
+  for (const r of fatti) for (const k in r.tally) piante += r.tally[k] || 0;
+  for (const pa of ps) { const st = partStats(pa, cur); if (st && st.Vtot) prov += st.Vtot; }
+  const ops = [...new Set(rs.map(r => r.op).concat(hs.map(h => h.op)).filter(Boolean))]; const ult = Math.max(0, ...rs.map(r => r.t1 || r.t0 || r.mod || 0), ...hs.map(h => h.t || 0));
+  let centro = portaleCentro(rs.concat(ps)); if (!centro) { const a = ps.find(x => x.geom); if (a) { const b = GEO.bbox(a.geom); centro = {lat: Math.round((b[1] + b[3]) / 2 * 1e5) / 1e5, lon: Math.round((b[0] + b[2]) / 2 * 1e5) / 1e5}; } }
+  return {
+    comune: p.comuni || '', localita: '', proprieta: p.proprieta || '', regione: p.regione || '', sup: Math.round(ps.reduce((s, x) => s + (num(x.sup_tot) || 0), 0) * 100) / 100 || null,
+    sezione: TX('us', p), tecnico: p.tecnico || '', dataInizio: p.anno ? String(p.anno) : '', dataFine: p.anno && num(p.durata) ? String(num(p.anno) + num(p.durata) - 1) : '',
+    operatori: ops, ultimo: ult ? new Date(ult).toISOString() : null, centro,
+    stato: {unita: TX('uns', p), particelle: ps.length, rilievi: rs.length, rilieviDaFare: rs.length - fatti.length, piante, altezze: hs.length, osservazioni: os.length, provvigione: Math.round(prov)}
+  };
+}
+
+/* =====================================================================
+   Portale Foresta — modulo comune alle tre app (PAF Campo, Martellata Campo, DL Foresta)
+   Pubblica sul server del portale (Cloudflare Worker + R2) il GeoPackage, la scheda di stato,
+   le foto e i report; mostra l'elenco dei progetti pubblicati da tutte le app.
+   Richiede, definiti dall'app: PT_APP ('paf'|'mc'|'dl'), PT_STORE (nome dello store dei lotti/piani),
+   PT_FOTO_KEY (campo della foto che punta al lotto), portaleStato(l) (scheda di stato), portaleMain (vista principale).
+   ===================================================================== */
+const PT_APPS = {paf: {nome: 'PAF Campo', url: 'https://gennaroventura66-creator.github.io/paf-campo/'}, mc: {nome: 'Martellata Campo', url: 'https://gennaroventura66-creator.github.io/martellata-campo/'}, dl: {nome: 'DL Foresta', url: 'https://gennaroventura66-creator.github.io/dl-foresta/'}};
+const PT = {
+  busy: false, list: null, f: {app: ''}, t: null, cur: null, files: null,
+  url: () => String(LS.get('portale-url', '') || '').trim().replace(/\/+$/, ''),
+  key: () => String(LS.get('portale-key', '') || '').trim(),
+  on: () => !!(PT.url() && PT.key()),
+  auto: () => LS.get('portale-auto', true),
+  pid: l => PT_APP + '_' + l.id,
+  cur_: () => (typeof prog === 'function' ? prog() : null),
+  /* richiesta al portale: body = Uint8Array/ArrayBuffer/stringa oppure nulla; bin = risposta binaria */
+  async req(method, path, body, mime, bin) {
+    if (!PT.on()) throw new Error('Portale non configurato: in Altro → Portale inserisci indirizzo e chiave.');
+    const url = PT.url() + '/api/' + path; const h = {Authorization: 'Bearer ' + PT.key(), 'X-App': PT_APP, 'X-Operatore': typeof opName === 'function' ? opName() : ''};
+    if (body != null) h['Content-Type'] = mime || 'application/octet-stream';
+    let status, text, data;
+    if (NATIVE) {
+      const o = {url, method, headers: h, connectTimeout: 20000, readTimeout: 180000}; if (bin) o.responseType = 'arraybuffer';
+      if (body != null) { if (typeof body === 'string') o.data = body; else { o.data = u8ToB64(body instanceof Uint8Array ? body : new Uint8Array(body)); o.dataType = 'file'; } }
+      let r; try { r = await Capacitor.nativePromise('CapacitorHttp', 'request', o); } catch (e) { throw new Error('Portale non raggiungibile (' + (e.message || 'rete assente') + ')'); }
+      status = r.status; data = r.data; text = typeof data === 'string' ? data : JSON.stringify(data);
+      if (status >= 200 && status < 300) { if (bin) return b64ToU8(data); if (typeof data === 'string') { try { return JSON.parse(data); } catch (e) { return data; } } return data; }
+    } else {
+      let r; try { r = await fetch(url, {method, headers: h, body: body == null ? undefined : body}); } catch (e) { throw new Error('Portale non raggiungibile (' + (e.message || 'rete assente') + '): controlla l\'indirizzo e la connessione.'); }
+      status = r.status; if (r.ok) return bin ? new Uint8Array(await r.arrayBuffer()) : r.json(); text = await r.text();
+    }
+    let msg = text; try { msg = JSON.parse(text).errore || text; } catch (e) {}
+    throw new Error(status === 401 ? 'Chiave del portale non valida' : `Portale ${status}: ${String(msg).slice(0, 160)}`);
+  },
+  ping: () => PT.req('GET', 'ping'),
+  listP: () => PT.req('GET', 'list'),
+  filesP: pid => PT.req('GET', `p/${pid}/files`),
+  get: (pid, name) => PT.req('GET', `p/${pid}/f/${name.split('/').map(encodeURIComponent).join('/')}`, null, null, true),
+  put: (pid, name, data, mime) => PT.req('PUT', `p/${pid}/f/${name.split('/').map(encodeURIComponent).join('/')}`, data, mime),
+  del: (pid, name) => PT.req('DELETE', `p/${pid}/f/${name.split('/').map(encodeURIComponent).join('/')}`),
+  link: (pid, name, dl) => `${PT.url()}/api/p/${pid}/f/${name.split('/').map(encodeURIComponent).join('/')}?k=${encodeURIComponent(PT.key())}${dl ? '&dl=1' : ''}`,
+  /* scheda di stato comune + parte specifica dell'app */
+  async stato(l, files) {
+    const st = Object.assign({app: PT_APP, appNome: PT_APPS[PT_APP].nome, ver: typeof APP_VER !== 'undefined' ? APP_VER : '', id: l.id, nome: l.nome || '', gpkg: GPKG_FILE, pubblicatoDa: typeof opName === 'function' ? opName() : '', qfc: l.qfc_pid ? {pid: l.qfc_pid, name: l.qfc_name || ''} : null}, await portaleStato(l));
+    if (files) { st.nReport = files.filter(f => f.name.startsWith('report/')).length; st.nFoto = files.filter(f => f.name.startsWith('foto/')).length; }
+    return st;
+  },
+  /* pubblica il lotto/piano aperto (o quello indicato) */
+  async pub(l, log = () => {}, quiet) {
+    l = l || PT.cur_(); if (!l) throw new Error('Nessun lotto aperto'); if (PT.busy) return; PT.busy = true; const pid = PT.pid(l);
+    try {
+      log('Preparo il GeoPackage…'); const u8 = await exportGpkg(l.id);
+      log('Carico i dati…'); await PT.put(pid, 'dati/' + GPKG_FILE, u8, 'application/geopackage+sqlite3');
+      let files = await PT.filesP(pid).then(r => r.files).catch(() => []);
+      // foto: solo quelle nuove o modificate (registro locale per lotto)
+      const reg = LS.get('portale-foto-' + pid, {}); const fotos = PT_FOTO_KEY && typeof fotoAll === 'function' ? (await fotoAll(l.id)).filter(f => !f.del && f.data) : []; let nf = 0;
+      const have = new Set(files.map(f => f.name));
+      for (const f of fotos) { const m = f.mod || f.t || 0; if (reg[f.id] === m && have.has('foto/' + f.id + '.jpg')) continue; try { await PT.put(pid, 'foto/' + f.id + '.jpg', b64ToU8(String(f.data).split(',')[1] || ''), 'image/jpeg'); reg[f.id] = m; nf++; if (nf % 5 === 0) log(`Foto caricate: ${nf}`); } catch (e) { log('Foto non caricata: ' + e.message); } }
+      if (nf) { LS.set('portale-foto-' + pid, reg); files = await PT.filesP(pid).then(r => r.files).catch(() => files); }
+      log('Aggiorno la scheda di stato…'); const st = await PT.stato(l, files); await PT.put(pid, 'stato.json', JSON.stringify(st), 'application/json');
+      LS.set('portale-pub-' + l.id, Date.now()); PT.list = null;
+      log(`Pubblicato: ${st.nome}${nf ? ` · ${nf} foto` : ''}.`); if (!quiet) toast('☁ Pubblicato sul portale', 2200);
+      return st;
+    } finally { PT.busy = false; }
+  },
+  /* archivio dei report: chiamato da out() per PDF/Word/Excel/CSV del lotto aperto */
+  async archivia(name, blob) {
+    try {
+      if (!PT.on() || !navigator.onLine) return; const l = PT.cur_(); if (!l) return;
+      if (!/\.(pdf|docx|xlsx|csv)$/i.test(name) || /backup/i.test(name)) return;
+      const d = new Date(); const pre = d.toISOString().slice(0, 10) + '_' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + '_';
+      const u8 = new Uint8Array(await blob.arrayBuffer()); const pid = PT.pid(l);
+      await PT.put(pid, 'report/' + pre + name, u8, blob.type || 'application/octet-stream');
+      const files = await PT.filesP(pid).then(r => r.files).catch(() => null);
+      if (files) { if (!files.some(f => f.name === 'dati/' + GPKG_FILE)) await PT.pub(l, () => {}, true); else await PT.put(pid, 'stato.json', JSON.stringify(await PT.stato(l, files)), 'application/json'); }
+      PT.list = null; toast('📄 Report archiviato nel portale', 2000);
+    } catch (e) { console.warn('portale', e); toast('Portale: ' + e.message, 3500); }
+  },
+  /* pubblicazione automatica dopo le modifiche (con ritardo) */
+  mark() { if (!PT.on() || !PT.auto()) return; clearTimeout(PT.t); PT.t = setTimeout(() => PT.autoPub(), 90e3); },
+  async autoPub() { const l = PT.cur_(); if (!l || !navigator.onLine || PT.busy) return; try { await PT.pub(l, () => {}, true); } catch (e) { console.warn('portale auto', e); } },
+  /* apre nell'app un progetto del portale (stessa app): scarica il GeoPackage e le foto */
+  async apri(pid, log = () => {}) {
+    if (!pid.startsWith(PT_APP + '_')) { const a = PT_APPS[pid.split('_')[0]]; if (a) { if (confirm(`Questo progetto è di ${a.nome}: aprirlo lì?`)) window.open(a.url + '?portale=' + encodeURIComponent(pid), '_blank'); } return; }
+    const files = (await PT.filesP(pid)).files; const g = files.find(f => f.name === 'dati/' + GPKG_FILE); if (!g) throw new Error('Nel portale manca il GeoPackage di questo progetto');
+    log('Scarico i dati…'); const u8 = await PT.get(pid, g.name); const lid = pid.slice(PT_APP.length + 1); const loc = S[PT_STORE].find(x => x.id === lid);
+    const r = await importGpkg(u8, loc ? lid : null, {force: true}); const id = loc ? lid : (r && r.lot ? r.lot.id : (S[PT_STORE].find(x => x.id === lid) || S[PT_STORE][S[PT_STORE].length - 1]).id);
+    const l = S[PT_STORE].find(x => x.id === id); if (!l) throw new Error('Importazione non riuscita');
+    // foto mancanti
+    const fl = files.filter(f => f.name.startsWith('foto/')); let nf = 0;
+    if (fl.length && PT_FOTO_KEY) { const loc = await DB.all('foto'); const have = new Map(loc.map(f => [f.id, f]));
+      for (const f of fl) { const fid = f.name.slice(5).replace(/\.jpg$/i, ''); const rec = have.get(fid); if (rec && rec.data) continue; try { const u = await PT.get(pid, f.name); const data = 'data:image/jpeg;base64,' + u8ToB64(u); if (rec) { rec.data = data; await DB.put('foto', rec); } else { const o = {id: fid, data, t: Date.parse(f.uploaded) || Date.now(), mod: 0, cap: '', op: f.meta && f.meta.op || ''}; o[PT_FOTO_KEY] = l.id; await DB.put('foto', o); } nf++; } catch (e) { console.warn(e); } } }
+    LS.set('portale-pub-' + l.id, Date.now());
+    log(`Aperto: ${l.nome || ''}${nf ? ` · ${nf} foto` : ''}`); return l;
+  },
+  /* ---------- interfaccia ---------- */
+  card() {
+    const l = PT.cur_(); const pub = l ? LS.get('portale-pub-' + l.id, 0) : 0; const lm = LS.get(PT_LASTMOD, 0);
+    return `<div class="card" id="ptcard"><h2>Portale Foresta</h2>
+      <p class="muted">Server tuo (Cloudflare) che raccoglie rilievi, foto e report di PAF Campo, Martellata Campo e DL Foresta. Dal PC apri l'indirizzo del portale nel browser per vedere tutti i progetti e scaricare i report. Le app con lo stesso indirizzo e chiave vedono gli stessi dati.</p>
+      <label class="f"><span>Indirizzo del portale</span><input value="${esc(PT.url())}" placeholder="https://foresta-portale.xxxx.workers.dev" inputmode="url" onchange="LS.set('portale-url',this.value.trim());PT.list=null"></label>
+      <label class="f"><span>Chiave di accesso</span><input type="password" value="${esc(PT.key())}" placeholder="chiave impostata nel Worker" onchange="LS.set('portale-key',this.value.trim());PT.list=null"></label>
+      <div class="row" style="margin:6px 0 8px"><button class="btn sm sec" onclick="PT.test()">Verifica collegamento</button><button class="btn sm" onclick="go('portale')" ${PT.on() ? '' : 'disabled'}>Apri il portale</button></div>
+      <label class="chk"><input type="checkbox" ${PT.auto() ? 'checked' : ''} onchange="LS.set('portale-auto',this.checked)"> Pubblica automaticamente le modifiche e archivia i report generati</label>
+      ${l ? `<div class="row" style="margin-top:8px"><button class="btn block" onclick="PT.pubUI()" ${PT.on() ? '' : 'disabled'}>☁ Pubblica “${esc(l.nome || '')}” sul portale</button></div>
+      <p class="muted" id="ptlog" style="margin:6px 0 0">${pub ? `Ultima pubblicazione ${new Date(pub).toLocaleString('it-IT')}${lm > pub ? ' · ci sono modifiche non pubblicate' : ''}` : 'Mai pubblicato.'}</p>` : ''}</div>`;
+  },
+  async test() { const el = $('#ptlog'); try { const r = await PT.ping(); if (!r.ok) throw new Error('chiave non valida'); toast('Portale raggiungibile' + (r.nome ? ' · utente ' + r.nome : ''), 3000); if (el) el.textContent = 'Collegamento riuscito.'; } catch (e) { toast('Portale: ' + e.message, 5000); } },
+  async pubUI() { const el = $('#ptlog'); const log = s => { if (el) el.textContent = s; }; try { await PT.pub(null, log); } catch (e) { log('Errore: ' + e.message); toast('Portale: ' + e.message, 5000); } },
+  statoPills(p) {
+    const s = p.stato || {}; const o = [];
+    if (p.app === 'dl') { if (s.martellate != null) o.push(['martellate', s.martellate]); if (s.verificate != null) o.push(['verificate', s.verificate]); if (s.tagliate != null) o.push(['tagliate', s.tagliate]); if (s.nonTrovate) o.push(['non trovate', s.nonTrovate, 'w']); if (s.senzaContrassegno) o.push(['senza contrassegno', s.senzaContrassegno, 'w']); if (s.danni != null) o.push(['danni', s.danni]); if (s.matricineHa) o.push(['matricine/ha', fmt(s.matricineHa, 0)]); if (s.nonConformi) o.push(['non conformità', s.nonConformi, 'w']); if (s.esito) o.push(['esito', s.esito]); }
+    else if (p.app === 'mc') { if (s.daAbbattere != null) o.push(['da abbattere', s.daAbbattere]); if (s.matricine != null) o.push(['matricine', s.matricine]); if (s.contrassegnoX) o.push(['X', s.contrassegnoX]); if (s.volume) o.push(['m³', fmt(s.volume, 1)]); if (s.ads) o.push(['aree di saggio', s.ads]); if (s.nonConformi) o.push(['non conformità', s.nonConformi, 'w']); }
+    else { if (s.particelle != null) o.push([s.unita || 'particelle', s.particelle]); if (s.rilievi != null) o.push(['rilievi', s.rilievi]); if (s.rilieviDaFare) o.push(['da rilevare', s.rilieviDaFare, 'w']); if (s.piante != null) o.push(['piante', s.piante]); if (s.altezze) o.push(['altezze', s.altezze]); }
+    return o;
+  },
+  view() {
+    if (!PT.on()) { $('#view').innerHTML = `<div class="card"><h2>Portale Foresta</h2><p class="muted">Il portale non è configurato: inserisci indirizzo e chiave in Altro → Portale.</p><button class="btn" onclick="go('altro')">Vai a Altro</button></div>`; return; }
+    const dIt = s => s ? new Date(s).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : '';
+    let h = `<div class="card"><h2>Portale Foresta</h2><div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:8px">${['', 'paf', 'mc', 'dl'].map(a => `<button class="chip ${PT.f.app === a ? 'on' : ''}" onclick="PT.f.app='${a}';PT.view()">${a ? PT_APPS[a].nome : 'Tutti'}</button>`).join('')}<button class="chip" onclick="PT.list=null;PT.view()">↻</button><a class="chip" href="${esc(PT.url())}" target="_blank" rel="noopener">Sito del portale ↗</a></div><div id="ptlist">${PT.list ? '' : '<p class="muted">Carico l\'elenco…</p>'}</div></div>`;
+    $('#view').innerHTML = h;
+    const render = () => {
+      const list = (PT.list || []).filter(p => !PT.f.app || p.app === PT.f.app); const el = $('#ptlist'); if (!el) return;
+      el.innerHTML = `<div class="list">${list.map(p => `<div class="it" onclick="PT.openUI('${p.pid}')" style="flex-direction:column;align-items:stretch;gap:4px"><div class="row" style="justify-content:space-between"><b><span class="pill" style="background:${{paf: '#2f6b2a', mc: '#1f5f8b', dl: '#5b3d1e'}[p.app] || '#555'};color:#fff;margin-right:6px">${esc(PT_APPS[p.app] ? PT_APPS[p.app].nome : p.app)}</span>${esc(p.nome || p.pid)}</b>${p.app === PT_APP ? '<span class="muted">questa app</span>' : ''}</div><span class="muted">${esc([p.comune, p.localita].filter(Boolean).join(' · '))}${p.sup ? ' · ' + fmt(num(p.sup), 2) + ' ha' : ''} · ${dIt(p.pubblicato)}${p.operatori && p.operatori.length ? ' · ' + esc(p.operatori.join(', ')) : ''}</span><div class="row" style="flex-wrap:wrap;gap:4px">${PT.statoPills(p).map(([k, v, c]) => `<span class="pill ${c || ''}">${esc(String(v))} ${esc(k)}</span>`).join('')}${p.nReport ? `<span class="pill">📄 ${p.nReport}</span>` : ''}${p.nFoto ? `<span class="pill">📷 ${p.nFoto}</span>` : ''}</div></div>`).join('') || '<p class="muted">Nessun progetto pubblicato.</p>'}</div>`;
+    };
+    if (PT.list) render(); else PT.listP().then(r => { PT.list = r.progetti; render(); }).catch(e => { const el = $('#ptlist'); if (el) el.innerHTML = `<p class="warnbox">${esc(e.message)}</p>`; });
+  },
+  async openUI(pid) {
+    const p = (PT.list || []).find(x => x.pid === pid); if (!p) return; const dIt = s => s ? new Date(s).toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'}) : '';
+    const kb = n => n > 1e6 ? fmt(n / 1e6, 1) + ' MB' : fmt(n / 1e3, 0) + ' kB';
+    $('#view').innerHTML = `<div class="card"><button class="btn sm sec" onclick="PT.view()">‹ Portale</button><h2 style="margin-top:8px">${esc(p.nome || pid)}</h2><p class="muted">${esc(PT_APPS[p.app] ? PT_APPS[p.app].nome : p.app)} · ${esc([p.comune, p.localita, p.proprieta].filter(Boolean).join(' · '))}${p.sup ? ' · ' + fmt(num(p.sup), 2) + ' ha' : ''}<br>pubblicato ${dIt(p.pubblicato)}${p.pubblicatoDa ? ' da ' + esc(p.pubblicatoDa) : ''}${p.operatori && p.operatori.length ? ' · operatori: ' + esc(p.operatori.join(', ')) : ''}</p>
+      <div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px">${PT.statoPills(p).map(([k, v, c]) => `<span class="pill ${c || ''}">${esc(String(v))} ${esc(k)}</span>`).join('')}</div>
+      ${p.verifiche && p.verifiche.length ? `<div class="list" style="margin-bottom:8px">${p.verifiche.map(v => `<div class="it"><span>${v.ok === true ? '✅' : v.ok === false ? '❌' : 'ℹ️'} ${esc(v.t)}</span></div>`).join('')}</div>` : ''}
+      <div class="row"><button class="btn" onclick="PT.apriUI('${pid}')">${p.app === PT_APP ? 'Apri in questa app' : 'Apri in ' + esc(PT_APPS[p.app] ? PT_APPS[p.app].nome : p.app)}</button></div>
+      <h3>Report</h3><div id="ptrep" class="list"><p class="muted">Carico…</p></div></div>`;
+    try {
+      const files = (await PT.filesP(pid)).files; const rep = files.filter(f => f.name.startsWith('report/')).sort((a, b) => b.uploaded.localeCompare(a.uploaded)); const g = files.find(f => f.name === 'dati/' + (p.gpkg || ''));
+      const el = $('#ptrep'); if (!el) return;
+      el.innerHTML = (rep.map(f => `<div class="it"><div class="b"><b>${esc(f.name.slice(7))}</b><span class="muted">${dIt(f.uploaded)}${f.meta && f.meta.op ? ' · ' + esc(f.meta.op) : ''} · ${kb(f.size)}</span></div><button class="btn sm sec" onclick="PT.scarica('${pid}','${esc(f.name)}')">⬇</button></div>`).join('') || '<p class="muted">Nessun report archiviato.</p>') + (g ? `<div class="it"><div class="b"><b>${esc(g.name.slice(5))}</b><span class="muted">GeoPackage · ${kb(g.size)}</span></div><button class="btn sm sec" onclick="PT.scarica('${pid}','${esc(g.name)}')">⬇</button></div>` : '');
+    } catch (e) { const el = $('#ptrep'); if (el) el.innerHTML = `<p class="warnbox">${esc(e.message)}</p>`; }
+  },
+  async scarica(pid, name) { try { toast('Scarico…', 2000); const u8 = await PT.get(pid, name); const fn = name.split('/').pop(); PT.noArch = true; try { await out(fn, u8, fn.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream', true); } finally { setTimeout(() => { PT.noArch = false; }, 1000); } } catch (e) { toast('Portale: ' + e.message, 4000); } },
+  async apriUI(pid) {
+    if (!pid.startsWith(PT_APP + '_')) return PT.apri(pid);
+    toast('Scarico il progetto dal portale…', 3000);
+    try { const l = await PT.apri(pid, s => toast(s, 2500)); PT.sel(l); go(portaleMain); } catch (e) { toast('Portale: ' + e.message, 5000); }
+  },
+  sel(l) { if (PT_STORE === 'progetti') sel.prog = l.id; else sel.lot = l.id; if (typeof persistSel === 'function') persistSel(); }
+};
+VIEWS.portale = () => PT.view();
+/* pubblicazione automatica: ogni salvataggio segna il lotto come da pubblicare */
+(() => { const _save = save; save = async function (...a) { const r = await _save.apply(this, a); PT.mark(); return r; }; const _remove = remove; remove = async function (...a) { const r = await _remove.apply(this, a); PT.mark(); return r; }; })();
+/* apertura da link del portale: ...?portale=<pid> */
+addEventListener('load', () => { const pid = new URLSearchParams(location.search).get('portale'); if (!pid) return; history.replaceState(null, '', location.pathname); setTimeout(() => { if (!PT.on()) { toast('Configura il portale in Altro → Portale per aprire il progetto', 6000); return; } PT.apriUI(pid); }, 1500); });
 
 boot();
 </script>
