@@ -162,7 +162,7 @@ tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
    PAF Campo — configurazione: specie, schede regionali, norme
    Tutto modificabile: le schede sono dati, non codice.
    ============================================================ */
-const APP_VER = '0.7.0';
+const APP_VER = '0.7.1';
 
 /* Equazioni INFC 2005 (Tabacchi et al., 2011) – coefficienti dal pacchetto R ForIT (CRAN).
    Volume fusto e rami grossi v [dm³] = b1 + b2·d²·h (+ b3·d); fitomassa epigea dw4 [kg] con la stessa forma.
@@ -4112,6 +4112,9 @@ async function portaleStato(p) {
    PT_FOTO_KEY (campo della foto che punta al lotto), portaleStato(l) (scheda di stato), portaleMain (vista principale).
    ===================================================================== */
 const PT_APPS = {paf: {nome: 'PAF Campo', url: 'https://gennaroventura66-creator.github.io/paf-campo/'}, mc: {nome: 'Martellata Campo', url: 'https://gennaroventura66-creator.github.io/martellata-campo/'}, dl: {nome: 'DL Foresta', url: 'https://gennaroventura66-creator.github.io/dl-foresta/'}};
+/* base dell'ultima sincronizzazione con il portale (unione a tre vie) */
+async function ptBaseGet(id) { try { const r = await DB.get('config', 'ptbase:' + id); return r ? r.u8 : null; } catch (e) { return null; } }
+async function ptBaseSet(id, u8) { try { await DB.put('config', {id: 'ptbase:' + id, u8: new Uint8Array(u8)}); } catch (e) {} }
 const PT = {
   busy: false, list: null, f: {app: ''}, t: null, cur: null, files: null,
   url: () => String(LS.get('portale-url', '') || '').trim().replace(/\/+$/, ''),
@@ -4154,21 +4157,39 @@ const PT = {
   },
   /* pubblica il lotto/piano aperto (o quello indicato) */
   async pub(l, log = () => {}, quiet) {
-    l = l || PT.cur_(); if (!l) throw new Error('Nessun lotto aperto'); if (PT.busy) return; PT.busy = true; const pid = PT.pid(l);
+    l = l || PT.cur_(); if (!l) throw new Error('Nessun lotto aperto'); if (PT.busy) return; PT.busy = true; const pid = PT.pid(l); const gname = 'dati/' + GPKG_FILE;
     try {
-      log('Preparo il GeoPackage…'); const u8 = await exportGpkg(l.id);
-      log('Carico i dati…'); await PT.put(pid, 'dati/' + GPKG_FILE, u8, 'application/geopackage+sqlite3');
-      let files = await PT.filesP(pid).then(r => r.files).catch(() => []);
-      // foto: solo quelle nuove o modificate (registro locale per lotto)
-      const reg = LS.get('portale-foto-' + pid, {}); const fotos = PT_FOTO_KEY && typeof fotoAll === 'function' ? (await fotoAll(l.id)).filter(f => !f.del && f.data) : []; let nf = 0;
+      let files = await PT.filesP(pid).then(r => r.files).catch(() => []); let ricevuti = 0; const t0 = Date.now();
+      const remote = files.find(f => f.name === gname); const sig = remote ? remote.etag + '|' + remote.uploaded : '';
+      if (sig && sig !== l.pt_sig) { // dati cambiati da un altro dispositivo: scarico e unisco (tre vie, come con QFieldCloud)
+        log('Scarico i dati dal portale…'); const u8 = await PT.get(pid, gname);
+        const {rep} = await importGpkg(u8, l.id, {base: await ptBaseGet(l.id), force: true}); ricevuti = (rep.nuovi || 0) + (rep.agg || 0) + (rep.elim || 0);
+        await ptBaseSet(l.id, u8); l.pt_sig = sig; log(`Dal portale: ${rep.nuovi || 0} nuovi, ${rep.agg || 0} aggiornati, ${rep.elim || 0} eliminati.`);
+      }
+      const local = !sig || !l.pt_last || ricevuti > 0 || LS.get(PT_LASTMOD, 0) > l.pt_last;
+      if (local) {
+        log('Preparo il GeoPackage…'); const out = await exportGpkg(l.id);
+        log('Carico i dati…'); const put = await PT.put(pid, gname, out, 'application/geopackage+sqlite3');
+        await ptBaseSet(l.id, out); l.pt_sig = put.etag + '|' + put.uploaded; files = await PT.filesP(pid).then(r => r.files).catch(() => files);
+      } else log('Nessuna modifica locale da inviare.');
+      // foto: invio quelle nuove o modificate (registro locale per lotto), ricevo quelle mancanti
+      const reg = LS.get('portale-foto-' + pid, {}); const fotos = PT_FOTO_KEY && typeof fotoAll === 'function' ? (await fotoAll(l.id)).filter(f => !f.del) : []; let nf = 0, nr = 0;
       const have = new Set(files.map(f => f.name));
-      for (const f of fotos) { const m = f.mod || f.t || 0; if (reg[f.id] === m && have.has('foto/' + f.id + '.jpg')) continue; try { await PT.put(pid, 'foto/' + f.id + '.jpg', b64ToU8(String(f.data).split(',')[1] || ''), 'image/jpeg'); reg[f.id] = m; nf++; if (nf % 5 === 0) log(`Foto caricate: ${nf}`); } catch (e) { log('Foto non caricata: ' + e.message); } }
-      if (nf) { LS.set('portale-foto-' + pid, reg); files = await PT.filesP(pid).then(r => r.files).catch(() => files); }
+      for (const f of fotos) {
+        const fn = 'foto/' + f.id + '.jpg';
+        if (f.data) { const m = f.mod || f.t || 0; if (reg[f.id] === m && have.has(fn)) continue; try { await PT.put(pid, fn, b64ToU8(String(f.data).split(',')[1] || ''), 'image/jpeg'); reg[f.id] = m; nf++; if (nf % 5 === 0) log(`Foto inviate: ${nf}`); } catch (e) { log('Foto non caricata: ' + e.message); } }
+        else if (have.has(fn)) { try { const u = await PT.get(pid, fn); f.data = 'data:image/jpeg;base64,' + u8ToB64(u); await DB.put('foto', f); reg[f.id] = f.mod || f.t || 0; nr++; } catch (e) { console.warn('foto', e); } }
+      }
+      if (nf || nr) { LS.set('portale-foto-' + pid, reg); if (nf) files = await PT.filesP(pid).then(r => r.files).catch(() => files); if (nr && typeof loadFoto === 'function') loadFoto(); }
       log('Aggiorno la scheda di stato…'); const st = await PT.stato(l, files); await PT.put(pid, 'stato.json', JSON.stringify(st), 'application/json');
+      l.pt_last = t0; l.pt_err = ''; await DB.put(PT_STORE, l);
       LS.set('portale-pub-' + l.id, Date.now()); PT.list = null;
-      log(`Pubblicato: ${st.nome}${nf ? ` · ${nf} foto` : ''}.`); if (!quiet) toast('☁ Pubblicato sul portale', 2200);
+      log(`Portale aggiornato: ${st.nome}${nf ? ` · ${nf} foto inviate` : ''}${nr ? ` · ${nr} foto ricevute` : ''}${ricevuti ? ` · ${ricevuti} aggiornamenti ricevuti` : ''}.`);
+      if (!quiet) toast(ricevuti ? `☁ Portale: ${ricevuti} aggiornamenti ricevuti` : '☁ Sincronizzato con il portale', 2500);
+      if (ricevuti && typeof go === 'function' && sel.view && sel.view !== 'altro') go(sel.view);
       return st;
-    } finally { PT.busy = false; }
+    } catch (e) { l.pt_err = e.message; throw e; }
+    finally { PT.busy = false; }
   },
   /* archivio dei report: chiamato da out() per PDF/Word/Excel/CSV del lotto aperto */
   async archivia(name, blob) {
@@ -4204,13 +4225,13 @@ const PT = {
   card() {
     const l = PT.cur_(); const pub = l ? LS.get('portale-pub-' + l.id, 0) : 0; const lm = LS.get(PT_LASTMOD, 0);
     return `<div class="card" id="ptcard"><h2>Portale Foresta</h2>
-      <p class="muted">Server tuo (Cloudflare) che raccoglie rilievi, foto e report di PAF Campo, Martellata Campo e DL Foresta. Dal PC apri l'indirizzo del portale nel browser per vedere tutti i progetti e scaricare i report. Le app con lo stesso indirizzo e chiave vedono gli stessi dati.</p>
+      <p class="muted">Server tuo (Cloudflare) che raccoglie rilievi, foto e report di PAF Campo, Martellata Campo e DL Foresta. Funziona insieme o in alternativa a QFieldCloud: la sincronizzazione unisce le modifiche dei vari dispositivi (telefono, PC, colleghi) come con QFieldCloud. Dal PC apri l'indirizzo del portale nel browser per vedere tutti i progetti e scaricare i report. Le app con lo stesso indirizzo e chiave vedono gli stessi dati.</p>
       <label class="f"><span>Indirizzo del portale</span><input value="${esc(PT.url())}" placeholder="https://foresta-portale.xxxx.workers.dev" inputmode="url" onchange="LS.set('portale-url',this.value.trim());PT.list=null"></label>
       <label class="f"><span>Chiave di accesso</span><input type="password" value="${esc(PT.key())}" placeholder="chiave impostata nel Worker" onchange="LS.set('portale-key',this.value.trim());PT.list=null"></label>
       <div class="row" style="margin:6px 0 8px"><button class="btn sm sec" onclick="PT.test()">Verifica collegamento</button><button class="btn sm" onclick="go('portale')" ${PT.on() ? '' : 'disabled'}>Apri il portale</button></div>
-      <label class="chk"><input type="checkbox" ${PT.auto() ? 'checked' : ''} onchange="LS.set('portale-auto',this.checked)"> Pubblica automaticamente le modifiche e archivia i report generati</label>
-      ${l ? `<div class="row" style="margin-top:8px"><button class="btn block" onclick="PT.pubUI()" ${PT.on() ? '' : 'disabled'}>☁ Pubblica “${esc(l.nome || '')}” sul portale</button></div>
-      <p class="muted" id="ptlog" style="margin:6px 0 0">${pub ? `Ultima pubblicazione ${new Date(pub).toLocaleString('it-IT')}${lm > pub ? ' · ci sono modifiche non pubblicate' : ''}` : 'Mai pubblicato.'}</p>` : ''}</div>`;
+      <label class="chk"><input type="checkbox" ${PT.auto() ? 'checked' : ''} onchange="LS.set('portale-auto',this.checked)"> Sincronizza automaticamente le modifiche e archivia i report generati</label>
+      ${l ? `<div class="row" style="margin-top:8px"><button class="btn block" onclick="PT.pubUI()" ${PT.on() ? '' : 'disabled'}>☁ Sincronizza “${esc(l.nome || '')}” con il portale</button></div>
+      <p class="muted" id="ptlog" style="margin:6px 0 0">${pub ? `Ultima sincronizzazione ${new Date(pub).toLocaleString('it-IT')}${lm > pub ? ' · ci sono modifiche non ancora inviate' : ''}${l.pt_err ? ' · ultimo errore: ' + esc(l.pt_err) : ''}` : 'Mai sincronizzato.'}</p>` : ''}</div>`;
   },
   async test() { const el = $('#ptlog'); try { const r = await PT.ping(); if (!r.ok) throw new Error('chiave non valida'); toast('Portale raggiungibile' + (r.nome ? ' · utente ' + r.nome : ''), 3000); if (el) el.textContent = 'Collegamento riuscito.'; } catch (e) { toast('Portale: ' + e.message, 5000); } },
   async pubUI() { const el = $('#ptlog'); const log = s => { if (el) el.textContent = s; }; try { await PT.pub(null, log); } catch (e) { log('Errore: ' + e.message); toast('Portale: ' + e.message, 5000); } },
